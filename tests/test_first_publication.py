@@ -22,6 +22,17 @@ class FirstPublicationTests(unittest.TestCase):
     def test_exact_scope_works_without_global_enable(self):
         self.assertEqual(self.check()['enabled_capabilities'], [])
 
+    def test_channels_scope_is_separate_from_tencent_and_wechat(self):
+        t=dict(self.target,platform='wechat_channels');m=dict(targets=[t],assets=[])
+        p=copy.deepcopy(self.profile)
+        p['accounts']['editor']['platforms']=['wechat_channels']
+        p['adapters']['wechat_channels']=p['adapters']['douyin']
+        p['first_publication_runs'][0].update(platform='wechat_channels',manifest_digest=digest(m))
+        self.assertEqual(self.check(profile=p,target=t,manifest=m)['enabled_capabilities'],[])
+        for platform in ('tencent_video','wechat'):
+            p['first_publication_runs'][0]['platform']=platform
+            with self.subTest(platform=platform),self.assertRaises(PublishError):self.check(profile=p,target=t,manifest=m)
+
     def test_empty_and_missing_scope_refused(self):
         for entries in ([], [{}]):
             p=copy.deepcopy(self.profile);p['first_publication_runs']=entries

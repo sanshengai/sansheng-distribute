@@ -8,8 +8,9 @@ from urllib.parse import urlsplit
 from environment import load_profile
 from publish_core import PublishError, digest, read_json, resolve_file, target_of, validate, write_json
 
-SOCIAL = {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'xiaohongshu'}
+SOCIAL = {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels', 'xiaohongshu'}
 CHECKS = {
+ 'wechat_channels': ['进入微信视频号助手并核对视频号ID；不使用公众号或腾讯视频身份', '核对短标题、描述、话题、竖横封面、AI声明与合集；从内容管理独立确认实际作品ID和状态'],
  'x': ['区分普通帖与长文章；核实账号当前文字及视频权限', '重新打开真实状态页或可恢复编辑稿，核对文字、链接、媒体与播放'],
  'weibo': ['保留话题和链接；预填不等于公开发表', '从本人内容管理重新打开对应内容，审核中保持 pending'],
  'douyin': ['核对封面、话题、描述及平台要求的真实声明', '从作品管理核对身份和审核状态；投稿成功不等于公开可看'],

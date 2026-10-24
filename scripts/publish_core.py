@@ -26,6 +26,7 @@ PLATFORMS = {
     "weibo": {"text", "images", "video"},
     "douyin": {"video"},
     "tencent_video": {"video"},
+    "wechat_channels": {"video"},
     "bilibili": {"video"},
     "xiaohongshu": {"images", "video"},
 }
@@ -471,7 +472,7 @@ class Store:
 
 def _first_publication_trial(profile, target, manifest):
     """One expiring social publication trial; ordinary authorization still applies."""
-    if manifest is None or target['endpoint'] != 'publish' or target['platform'] not in {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video'}:
+    if manifest is None or target['endpoint'] != 'publish' or target['platform'] not in {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels'}:
         return False
     expected = {'manifest_digest': digest(manifest), 'target_id': target['id'],
                 'platform': target['platform'], 'account': target['account'],

@@ -66,8 +66,9 @@ python3 examples/offline_demo.py
 | 微信公众号 | API 草稿，必要时网页补音视频 | 已通过真实测试稿；未验证公开发表、群发或全程 API 插入媒体 |
 | X / 推特 | 文字、图文、视频与文章工作流 | 适配与离线测试；真实账号尚未验收 |
 | 微博 | 文字、图文与视频 | 适配与离线测试；真实账号尚未验收 |
-| 抖音、B 站 | 视频 | 适配与离线测试；真实账号尚未验收 |
+| 抖音、B 站 | 视频 | 已在一个真实账号完成逐集投稿、标题更正及独立读回；账号权限另行核验 |
 | 小红书 | 图文或视频预填 | 真实账号尚未验收；最后点击由作者完成，受限账号只准备本地包 |
+| 微信视频号 | 独立视频号目标、Agent 浏览器执行及独立读回 | 真实账号验收范围见能力表；与公众号、腾讯视频分开 |
 | 腾讯视频 | 独立视频平台流程 | 真实账号尚未验收；不把微信视频号当作腾讯视频 |
 
 平台页面会变化，账号权限也会不同。[能力与证据](references/platforms.md)是当前范围说明。初始化不会自动开放未验收能力，也不会替用户授权。
@@ -130,6 +131,7 @@ python3 setup.py --doctor
 | 抖音 | 视频素材、创作后台和 Agent 浏览器工具 | 不上传抖音视频 | `python3 setup.py --init --platform douyin` |
 | B 站 | 视频素材、创作中心和 Agent 浏览器工具 | 不上传 B 站视频 | `python3 setup.py --init --platform bilibili` |
 | 小红书 | 图文/视频、浏览器；作者最终点击 | 不操作小红书 | `python3 setup.py --init --platform xiaohongshu` |
+| 微信视频号 | 视频素材、视频号助手和 Agent 浏览器工具 | 不上传视频号视频 | `python3 setup.py --init --platform wechat_channels` |
 | 腾讯视频 | 视频素材、独立创作后台和 Agent 浏览器工具 | 不上传腾讯视频 | `python3 setup.py --init --platform tencent_video` |
 
 上表命令用于首次初始化，已有配置会拒绝覆盖。已初始化的用户按[配置说明](references/setup.md)显式编辑所选配置；不要为了添加平台另建一份空账本。公众号缺少 Write 模块时会给出安装路径要求，核心不会因此要求所有用户安装 Write。
@@ -171,7 +173,7 @@ python3 setup.py --doctor
 
 Register the repository with your agent's Skill installation mechanism, or use the Claude plugin commands shown above. Agent discovery and actual browser execution are separate acceptance criteria.
 
-All optional platform modules start disabled. Use interactive `python3 setup.py` or choose a module with `--init --platform wechat` (or `x`, `weibo`, `douyin`, `bilibili`, `xiaohongshu`, `tencent_video`). Initialization refuses to overwrite an existing profile and does not grant publishing permissions. Existing users edit their selected profile explicitly; do not create a fresh ledger to add a platform.
+All optional platform modules start disabled. Use interactive `python3 setup.py` or choose a module with `--init --platform wechat` (or `x`, `weibo`, `douyin`, `bilibili`, `xiaohongshu`, `tencent_video`, `wechat_channels`). Initialization refuses to overwrite an existing profile and does not grant publishing permissions. Existing users edit their selected profile explicitly; do not create a fresh ledger to add a platform.
 
 `--show-profile` reveals selected paths only. `--doctor` checks local requirements for selected modules only; it makes no API requests. Use `SANSHENG_DISTRIBUTE_PROFILE` and `SANSHENG_DISTRIBUTE_STATE` for explicit paths. Legacy configuration is preserved; ambiguous old/new ledgers require an explicit choice. Secrets belong in the environment or a private env file, never in a publishing package or Git.
 

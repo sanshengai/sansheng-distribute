@@ -28,7 +28,7 @@ class PlatformPackTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
 
     def test_all_platforms_preserve_fields_assets_and_metadata(self):
-        for platform in ('x','weibo','douyin','bilibili','tencent_video','xiaohongshu'):
+        for platform in ('x','weibo','douyin','bilibili','tencent_video','wechat_channels','xiaohongshu'):
             m=fixture(self.root,platform,'video');t=m['targets'][0]
             t.update(title='标题',description='独立简介',tags=['AI','生图'],links=[{'label':'看板','url':'https://example.com/board'}],cover_asset_id='image',subtitle_asset_ids=['subtitle'],platform_metadata={'category':'作者选择'})
             p=build_pack(m,'t')
