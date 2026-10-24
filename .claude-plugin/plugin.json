@@ -1,11 +1,24 @@
 {
   "name": "sansheng-distribute",
   "description": "Experimental agent publishing handoffs, per-platform progress, verified drafts and resumable delivery.",
-  "version": "0.3.0",
-  "author": {"name": "叁笙 (sansheng)", "email": "sandypoli@gmail.com"},
+  "version": "0.4.0",
+  "author": {
+    "name": "叁笙 (sansheng)",
+    "email": "sandypoli@gmail.com"
+  },
   "homepage": "https://github.com/sanshengai/sansheng-distribute",
   "repository": "https://github.com/sanshengai/sansheng-distribute",
   "license": "MIT",
-  "skills": ["./"],
-  "keywords": ["claude-code", "claude-code-skills", "agent-skills", "publishing", "wechat", "social-media", "chinese"]
+  "skills": [
+    "./"
+  ],
+  "keywords": [
+    "claude-code",
+    "claude-code-skills",
+    "agent-skills",
+    "publishing",
+    "wechat",
+    "social-media",
+    "chinese"
+  ]
 }
