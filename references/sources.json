@@ -1,0 +1,19 @@
+{
+  "reviewed_at": "2026-10-24",
+  "sources": [
+    {
+      "repository": "https://github.com/JimLiu/baoyu-skills",
+      "commit": "1567581c26ec29f4216c6e6835415bf30343b0e3",
+      "license": "MIT",
+      "scope": ["baoyu-post-to-wechat", "baoyu-post-to-x", "baoyu-post-to-weibo"],
+      "adoption": "workflow study; no upstream executable vendored; Weibo upstream prefill is not final publication"
+    },
+    {
+      "repository": "https://github.com/dreammis/social-auto-upload",
+      "commit": "3847fff01f5434a8a32829833163cd6723cabc59",
+      "license": "MIT; social-auto-upload SKILL states MIT-0",
+      "scope": ["douyin", "bilibili", "xiaohongshu"],
+      "adoption": "review candidate; not installed; tencent denotes WeChat Channels, not Tencent Video"
+    }
+  ]
+}

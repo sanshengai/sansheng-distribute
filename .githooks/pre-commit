@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Inspect staged blobs without printing matching secret values."""
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+PATTERNS = {
+    'google-key': r'AIza[0-9A-Za-z_-]{20,}',
+    'vertex-key': r'AQ\.[A-Za-z0-9_-]{20,}',
+    'api-key': r'sk-[A-Za-z0-9_-]{20,}',
+    'github-token': r'(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})',
+    'firecrawl-key': r'fc-[0-9a-f]{32}',
+    'private-key': r'-----BEGIN [A-Z ]*PRIVATE KEY-----',
+    'personal-windows-path': r'[Cc]:\\+Users\\+[^\\\s]+',
+    'personal-unix-path': r'/(?:Users|home)/[^/\s"\x27<>]+/',
+}
+PATTERN = re.compile('|'.join('(?P<'+name.replace('-', '_')+'>'+pattern+')' for name, pattern in PATTERNS.items()))
+
+
+def git(*args):
+    result=subprocess.run(['git',*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if result.returncode:
+        raise RuntimeError('Cannot inspect staged files; commit stopped.')
+    return result.stdout
+
+
+def main():
+    root=Path(git('rev-parse','--show-toplevel').decode().strip())
+    os.chdir(root)
+    paths=git('diff','--cached','--name-only','--diff-filter=ACMR','-z').split(b'\0')
+    hits=[]
+    for raw in paths:
+        if not raw: continue
+        name=os.fsdecode(raw)
+        if name.startswith('.githooks/'): continue
+        basename=Path(name).name
+        if ((basename=='.env' or basename.startswith('.env.')) and basename!='.env.example') or basename.endswith(('.private.json','.local.json')) or basename=='profile.json':
+            hits.append((name,'private-configuration'));continue
+        data=git('show',':'+name)
+        if b'\0' in data: continue
+        for match in PATTERN.finditer(data.decode('utf-8',errors='replace')):
+            hits.append((name,match.lastgroup))
+    if hits:
+        for name,rule in sorted(set(hits)): print(f'redact-guard: {name!r}: {rule}',file=sys.stderr)
+        print('Commit rejected. Remove private data from the staged version; values are not printed.',file=sys.stderr)
+        return 1
+    local=root/'.githooks/pre-commit.local'
+    if local.is_file():
+        result=subprocess.run([sys.executable,str(local)],cwd=root)
+        return result.returncode
+    return 0
+
+if __name__=='__main__':
+    try: raise SystemExit(main())
+    except (OSError,RuntimeError) as exc:
+        print(f'redact-guard: {exc}',file=sys.stderr);raise SystemExit(1)

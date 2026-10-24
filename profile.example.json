@@ -1,0 +1,20 @@
+{
+  "acceptance_runs": [],
+  "accounts": {
+    "wechat-main": {
+      "platforms": ["wechat"],
+      "restricted": false,
+      "wechat_env_file": "/path/to/private/wechat.env",
+      "wechat_appid_sha256": "REPLACE_WITH_SHA256_OF_THE_CONFIRMED_APP_ID"
+    }
+  },
+  "adapters": {
+    "wechat": {
+      "enabled_capabilities": [],
+      "execute": ["python3", "/path/to/sansheng-distribute/scripts/wechat_adapter.py", "execute", "--profile", "/path/to/private/profile.json", "--write-scripts", "/path/to/sansheng-write/scripts"],
+      "verify": ["python3", "/path/to/sansheng-distribute/scripts/wechat_adapter.py", "verify", "--profile", "/path/to/private/profile.json", "--write-scripts", "/path/to/sansheng-write/scripts"],
+      "continue": ["python3", "/path/to/sansheng-distribute/scripts/agent_adapter.py", "execute"],
+      "timeout_seconds": 2100
+    }
+  }
+}
