@@ -469,6 +469,31 @@ class Store:
         return self.status(key)
 
 
+def _first_publication_trial(profile, target, manifest):
+    """One expiring social publication trial; ordinary authorization still applies."""
+    if manifest is None or target['endpoint'] != 'publish' or target['platform'] not in {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video'}:
+        return False
+    expected = {'manifest_digest': digest(manifest), 'target_id': target['id'],
+                'platform': target['platform'], 'account': target['account'],
+                'content_type': target['content_type'], 'endpoint': 'publish'}
+    entries = profile.get('first_publication_runs', [])
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != set(expected) | {'expires_at', 'acknowledge_publication'}:
+            continue
+        if entry.get('acknowledge_publication') is not True or any(entry.get(k) != v for k, v in expected.items()):
+            continue
+        try:
+            expires = datetime.fromisoformat(entry['expires_at'])
+            seconds = (expires - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            continue
+        if 0 < seconds <= 24 * 60 * 60:
+            return True
+    return False
+
+
 def adapter_config(profile, target, *, readonly=False, manifest=None):
     account = profile.get("accounts", {}).get(target["account"], {})
     if target["platform"] not in account.get("platforms", []):
@@ -483,7 +508,8 @@ def adapter_config(profile, target, *, readonly=False, manifest=None):
                  'manifest_digest': digest(manifest), 'target_id': target['id'],
                  'platform': target['platform'], 'account': target['account'], 'endpoint': target['endpoint']
              }.items()) for t in trials))
-    if capability not in config.get("enabled_capabilities", []) and not readonly and not trial:
+    public_trial = not readonly and _first_publication_trial(profile, target, manifest)
+    if capability not in config.get("enabled_capabilities", []) and not readonly and not trial and not public_trial:
         raise PublishError(f"该平台能力尚未启用/验收：{capability}")
     for name in (("verify",) if readonly else ("execute", "verify")):
         argv = config.get(name)

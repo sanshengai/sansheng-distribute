@@ -9,7 +9,7 @@ metadata:
 
 当前为 0.3.0 实验版。接收生产端定稿和媒体位置，按指定平台、账号、终点执行；平台能力逐项验收，不因安装 Skill 就开启发送。
 
-首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
+首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介和话题时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
 先解析当前 `SKILL.md` 所在真实目录作为 Skill 根；下列 `scripts/...` 路径相对该目录，不相对用户工程。核心需 macOS/Linux、Python 3.10+ 及执行本机命令的工具（使用 POSIX 文件锁）；不能据此宣称支持 Windows。核心仅用标准库，平台另有依赖：公众号复用 Write 的 `wechat_api.py`，补媒体还需当前 Agent 的浏览器能力。
 
@@ -37,7 +37,7 @@ metadata:
 5. 结果未知先查询，不能重复上传/点击。成功要有账号、远端 ID 和内容读回；上传完成、受理、审核中均不叫发布完成。
 6. 浏览器遵循当前 Agent 的电脑工具约束，核对专用 profile；通道失败不切作者日常浏览器，不换技术绕过限制。
 
-新增适配器先锁上游版本与许可，再实现执行、独立查询；只填表的脚本不能登记为完整发布能力。未验收能力保持 disabled；已有授权的首次草稿/预填试验只能按验收方法配置精确 `acceptance_runs`，不能临时开放公开发布。
+新增适配器先锁上游版本与许可，再实现执行、独立查询；只填表的脚本不能登记为完整发布能力。未验收能力保持 disabled；已有授权的首次草稿/预填试验使用精确 `acceptance_runs`；首次公开投稿使用验收方法中的独立 `first_publication_runs`，绑定单次内容、账号、终点及有效期，不临时开放整个平台。
 
 ## 名称与兼容
 

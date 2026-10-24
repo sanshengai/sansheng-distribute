@@ -27,9 +27,15 @@ Claude Code、Codex、Antigravity、Grok Build 共用中性 manifest、Python CL
 }
 ```
 
-全部字段必须匹配当前清单，且终点只能 draft/prefill；publish/broadcast 不能用试验配置开放，受限账号也不能绕过。仍需 `authorize` 记录本次实际已有授权，不能把示例文字当批准。私有试验配置不提交 Git；验收完成后移除该项，保留账本与证据。
+全部字段必须匹配当前清单，且终点只能 draft/prefill；publish/broadcast 不能用 `acceptance_runs` 开放，受限账号也不能绕过。仍需 `authorize` 记录本次实际已有授权，不能把示例文字当批准。私有试验配置不提交 Git；验收完成后移除该项，保留账本与证据。
 
 先 `preflight`，再 `prepare / authorize / run`。`run` 内部也执行同样预检。只读恢复不要求重新开放写入能力，原稿被清理也不阻止读回。平台通过后，仅按已验收的账号范围与终点启用能力；不能因一个账号草稿成功便启用所有账号发表。
+
+## 首次公开投稿试验
+
+已有用户明确授权时，可在私有 profile 使用独立 `first_publication_runs`。每项必须且只能包含：`manifest_digest`、`target_id`、`platform`、`account`、`content_type`、`endpoint`、`expires_at`、`acknowledge_publication`。前六项精确绑定本次封存清单，endpoint 为 `publish`；expires_at 为含时区的 ISO 时间，剩余有效期不得超过24小时；acknowledge_publication 必须是布尔 true。
+
+仅支持 X、微博、抖音、B站、腾讯视频的首次公开投稿，不开放公众号群发或小红书最终点击，不支持视频号冒用腾讯视频能力。此配置仍需真实 `authorize`、账号限制检查、执行锁与独立读回；不能作为授权来源，也不自动升级其他账号或后续内容的发布能力。试验完成后移除该项，保留账本和实际远端身份；审核中保持 pending。
 
 ## 重复运行本地验证
 

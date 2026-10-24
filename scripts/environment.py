@@ -40,6 +40,9 @@ def _read(path):
     trials = value.get('acceptance_runs', [])
     if not isinstance(trials, list) or not all(isinstance(v, dict) for v in trials):
         raise EnvironmentError('acceptance_runs 必须是对象列表')
+    public_trials = value.get('first_publication_runs', [])
+    if not isinstance(public_trials, list) or not all(isinstance(v, dict) for v in public_trials):
+        raise EnvironmentError('first_publication_runs 必须是对象列表')
     if 'state_dir' in value and (not isinstance(value['state_dir'], str) or not value['state_dir'].strip()):
         raise EnvironmentError('state_dir 必须是非空路径字符串')
     return value
@@ -133,7 +136,7 @@ def _selected(profile):
     for platform, adapter in profile.get('adapters', {}).items():
         if adapter.get('enabled') is True or adapter.get('enabled_capabilities'):
             selected.add(platform)
-    for trial in profile.get('acceptance_runs', []):
+    for trial in profile.get('acceptance_runs', []) + profile.get('first_publication_runs', []):
         if isinstance(trial, dict) and trial.get('platform'):
             selected.add(trial['platform'])
     return sorted(selected)
