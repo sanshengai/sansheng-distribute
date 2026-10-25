@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import douyin_browser as editor
@@ -84,6 +85,11 @@ def facts(body, listed, public_identity):
                 or image_uri(a['Cover']['uri'])!=listed['cover_uri']
                 or image_uri(v['cover']['uri'])!=a['Cover']['uri']):raise ValueError()
         horizontal=image_uri(a['horizontal_cover']['uri'])
+        from douyin_schedule import native_timer
+        timer = native_timer(a)
+        if timer is not None and (timer['state'] != 'online'
+                                  or timer['public_at_epoch'] > time.time()):
+            raise PublishError('抖音作品仍在排期、排期受限或时间矛盾；不能认定已经发布')
         # Other choices need their own observed native mapping, not guessed labels.
         declaration=json.loads(a['user_declare_info'],object_pairs_hook=lambda pairs:pairs)
         if declaration!=[('choose_value','aigc')]:raise ValueError()
@@ -101,7 +107,7 @@ def facts(body, listed, public_identity):
                 caption=a['caption'],description=a['desc'],topics=names,
                 video=dict(vid=v['vid'],width=v['width'],height=v['height'],duration_ms=v['duration']),
                 covers=dict(vertical=a['Cover']['uri'],horizontal=horizontal),
-                declaration='内容由AI生成',collection=collection)
+                declaration='内容由AI生成',collection=collection,timer=timer)
 
 
 def native_image_url(value):

@@ -291,6 +291,22 @@
         }
       ],
       "adoption": "Official static frontend contract study: auth_data finderUser.finderUsername, native request _log_finder_id, exact post_list objectId, desc.shortTitle array, independent processing/visibility/schedule/originality states and visible post-feed-item fields. Original independent readonly helper only; no frontend code vendored or private request constructed/replayed. Existing first-season projected records are historical corroboration, not raw new-engine live acceptance. Login QR received in an unfocused owned window; authenticated readback and public-to-native identity binding still pending. No upload/send capability added."
+    },
+    {
+      "platform": "douyin_native_work_timer",
+      "reviewed_at": "2026-10-26",
+      "creator_url": "https://creator.douyin.com/creator-micro/content/manage",
+      "assets": [
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/async/9199.018aee6a.js",
+          "sha256": "13519da7a8dec98f9f64c08cb0006dc1a70036a90b198cad184a9065e5fc6d14"
+        },
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/douyin_content_index_micro_new.a59e122d.js",
+          "sha256": "861762ec0c6c1a56f626fb56d71be4654ad747114ee9aaea18a7d30159ac5786"
+        }
+      ],
+      "scope": "Native module 23934 timer enum and module 6803 status rendering. Published detail observation rejects pending, account-blocked, unbanned-pending and inconsistent future timers; timer alone never verifies publication. Native management page read-only checked; no live scheduled-post sample, upload or send; no frontend implementation vendored."
     }
   ]
 }

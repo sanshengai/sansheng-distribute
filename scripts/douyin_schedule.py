@@ -1,4 +1,4 @@
-"""Optional native scheduling prefill; never submits or invokes page callbacks."""
+"""Native scheduling prefill and timer observation; never submits."""
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
@@ -19,6 +19,33 @@ DATE_CONTEXT = '''epoch=>{const d=new Date(epoch*1000),pad=n=>String(n).padStart
  roundtrip_epoch:new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),d.getMinutes(),0,0).getTime()/1000,
  now:Date.now()/1000};}'''
 LIMIT_TEXT = re.compile(r'支持([1-9][0-9]*)(分钟|小时|天)后及([1-9][0-9]*)(分钟|小时|天)内的定时发布')
+
+
+def native_timer(aweme):
+    """Observe the work timer, independently of the editor date field.
+
+    Native modules 23934/6803 distinguish pending, online, banned and
+    unbanned-pending timers. This alone never verifies a public work.
+    """
+    if not isinstance(aweme, dict):
+        raise PublishError('抖音作品原生数据无效')
+    timer = aweme.get('timer')
+    if timer is None:
+        return None
+    try:
+        code, epoch = timer['status'], timer['public_time']
+        states = {0: 'scheduled_pending', 1: 'online',
+                  4: 'account_blocked', 5: 'account_unbanned_pending'}
+        if (type(code) is not int or code not in states or type(epoch) is not int
+                or epoch < 0 or code != 1 and epoch == 0):
+            raise ValueError()
+        dt = datetime.fromtimestamp(epoch, timezone.utc)
+        return dict(native_status=code, state=states[code], public_at_epoch=epoch,
+                    utc=dt.isoformat(),
+                    beijing=dt.astimezone(timezone(timedelta(hours=8))).isoformat(),
+                    publication_verified=False)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
+        raise PublishError('抖音原生排期状态或时间未覆盖；不能认定已经发布') from exc
 
 
 def requested(metadata):

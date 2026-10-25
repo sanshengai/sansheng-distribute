@@ -52,6 +52,30 @@ class Page:
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_native_timer_states_are_not_editor_prefill_or_publication_proof(self):
+        epoch = 1793442600
+        for code, state in [(0, 'scheduled_pending'), (1, 'online'),
+                            (4, 'account_blocked'), (5, 'account_unbanned_pending')]:
+            with self.subTest(code=code):
+                value = schedule.native_timer(dict(timer=dict(status=code, public_time=epoch)))
+                self.assertEqual(value['state'], state)
+                self.assertEqual(value['public_at_epoch'], epoch)
+                self.assertFalse(value['publication_verified'])
+                self.assertEqual(datetime.fromisoformat(value['utc']).timestamp(), epoch)
+                self.assertEqual(datetime.fromisoformat(value['beijing']).timestamp(), epoch)
+                self.assertTrue(value['beijing'].endswith('+08:00'))
+        self.assertIsNone(schedule.native_timer({}))
+        self.assertIsNone(schedule.native_timer(dict(timer=None)))
+        self.assertEqual(schedule.native_timer(dict(timer=dict(status=1, public_time=0)))['state'], 'online')
+
+    def test_native_timer_unknown_or_malformed_values_cannot_be_called_published(self):
+        for value in [None, [], dict(timer={}), dict(timer=[]),
+                      *[dict(timer=dict(status=v, public_time=1793442600)) for v in [True, '1', 2, 3, -1]],
+                      *[dict(timer=dict(status=1, public_time=v)) for v in [None, True, '1793442600', -1, 10**100]],
+                      *[dict(timer=dict(status=v, public_time=0)) for v in [0, 4, 5]]]:
+            with self.subTest(value=value), self.assertRaises(PublishError):
+                schedule.native_timer(value)
+
     def test_equivalent_zones_and_beijing_display(self):
         expected = schedule.requested(META)
         self.assertEqual(expected, schedule.requested({'publish_at': '2070-10-30T10:30:00Z'}))

@@ -35,6 +35,25 @@ def sample():
 
 
 class DouyinDetailTests(unittest.TestCase):
+    def test_pending_or_blocked_timer_cannot_pass_published_detail_readback(self):
+        for code in [0, 4, 5, 2, True]:
+            body, listed = sample()
+            body['aweme']['timer'] = dict(status=code, public_time=1793442600)
+            with self.subTest(code=code), patch.object(detail.time, 'time', return_value=1793442601), self.assertRaises(PublishError):
+                detail.facts(body, listed, 'fixture-public')
+
+    def test_online_timer_still_requires_consistent_public_time_and_all_other_fields(self):
+        body, listed = sample()
+        body['aweme']['timer'] = dict(status=1, public_time=1793442600)
+        with patch.object(detail.time, 'time', return_value=1793442599):
+            with self.assertRaises(PublishError):detail.facts(body, listed, 'fixture-public')
+        with patch.object(detail.time, 'time', return_value=1793442601):
+            value = detail.facts(body, listed, 'fixture-public')
+            self.assertEqual(value['timer']['state'], 'online')
+            self.assertFalse(value['timer']['publication_verified'])
+            body['aweme']['author']['uid'] = '111'
+            with self.assertRaises(PublishError):detail.facts(body, listed, 'fixture-public')
+
     def test_string_identity_ignores_rounded_numeric_ids_but_keeps_native_video(self):
         body,listed=sample();v=detail.facts(body,listed,'fixture-public')
         self.assertEqual(v['remote_id'],RID);self.assertEqual(v['video']['vid'],VID)
