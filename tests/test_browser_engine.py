@@ -163,12 +163,20 @@ class BrowserEngineTests(unittest.TestCase):
         self.page.modals=2
         with self.assertRaisesRegex(PublishError,'不是唯一'):engine.editor(self.page)
 
-    def test_publication_or_unmapped_fields_refused_in_local_preflight(self):
+    def test_unsupported_endpoint_or_unmapped_fields_refused_in_local_preflight(self):
         from platform_pack import build_pack
-        for field,value in (('endpoint','publish'),('title','independent title'),('platform_metadata',{'ai_generated':True})):
+        for field,value in (('endpoint','draft'),('title','independent title'),('platform_metadata',{'ai_generated':True})):
             manifest=copy.deepcopy(self.manifest);manifest['targets'][0][field]=value
             with self.assertRaises(PublishError):engine.check_pack(build_pack(manifest,'x',self.profile))
         self.assertEqual(self.page.writes,[]);self.assertEqual(self.actions,[])
+
+    def test_images_and_video_publish_refused_without_browser_connection(self):
+        from platform_pack import build_pack
+        pack=build_pack(self.manifest,'x',self.profile)
+        for content_type in ('images','video'):
+            with self.subTest(content_type=content_type), self.assertRaisesRegex(PublishError,'图片/视频发送尚未接入'):
+                engine.check_pack(dict(pack,endpoint='publish',content_type=content_type))
+        self.assertEqual(self.actions,[])
 
     def test_nontext_document_is_refused(self):
         from platform_pack import build_pack

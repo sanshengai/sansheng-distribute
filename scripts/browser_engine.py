@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundled bounded browser actions; no final-click path.
+"""Bundled bounded browser actions and opt-in X ordinary text submission candidate.
 
 Editor identities are Chrome session targets, not persistent platform draft IDs.
 Losing that session keeps the result unknown; it never authorizes another fill.
@@ -44,9 +44,11 @@ def check_pack(pack):
     if pack['platform'] == 'weibo':
         from weibo_browser import check_pack as check_weibo
         return check_weibo(pack)
-    if (pack['platform'] != 'x' or pack['endpoint'] != 'prefill'
+    if (pack['platform'] != 'x' or pack['endpoint'] not in {'prefill', 'publish'}
             or pack['content_type'] not in {'text','images','video'}):
-        raise PublishError('当前引擎仅承接 X text/images/video:prefill，不能公开发送')
+        raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text:publish 候选')
+    if pack['endpoint'] == 'publish' and pack['content_type'] != 'text':
+        raise PublishError('X 图片/视频发送尚未接入；不能静默转为纯文字')
     document = pack['document']
     if (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
         raise PublishError('当前 X 引擎不承接文章、独立封面、字幕或平台扩展字段')
@@ -81,7 +83,8 @@ def preflight_browser(manifest, target, profile, argv):
     result = inspect(profile)
     if not result['ok'] or not result.get('python'):
         raise PublishError('先用 setup.py --prepare-runtime 准备所选浏览器依赖')
-    return {'local_only':True, 'implemented':target['platform']+' '+target['content_type']+':prefill', 'final_click_available':False}
+    return {'local_only':True, 'implemented':target['platform']+' '+target['content_type']+':'+target['endpoint'],
+            'final_click_available':target['platform']=='x' and target['endpoint']=='publish'}
 
 
 def assert_identity(page, expected):
@@ -146,6 +149,9 @@ def marker_path(request_path):
 
 def dispatch(request_path, action, profile, lock_fd):
     candidate=read_json(request_path).get('target', {})
+    if candidate.get('platform') == 'x' and candidate.get('endpoint') == 'publish':
+        from x_publish_browser import dispatch as dispatch_x_publish
+        return dispatch_x_publish(request_path, action, profile, lock_fd)
     if candidate.get('platform')=='weibo' and candidate.get('content_type')=='video':
         from weibo_video_browser import dispatch as dispatch_weibo_video
         return dispatch_weibo_video(request_path,action,profile,lock_fd)

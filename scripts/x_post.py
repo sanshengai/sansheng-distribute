@@ -1,0 +1,233 @@
+"""Native X creation receipts and independent ordinary-post readback.
+
+Observe responses produced by the visible native UI; never replay GraphQL or
+construct signed/private API requests. A missing receipt remains unknown.
+"""
+from __future__ import annotations
+import html
+import re
+import time
+from urllib.parse import urlsplit
+
+from browser_runtime import background_tab, render_background_page
+from publish_core import PublishError, digest
+
+
+def status_url(identity, remote_id):
+    if (not isinstance(identity, str) or not re.fullmatch(r'@[A-Za-z0-9_]{1,15}', identity)
+            or not isinstance(remote_id, str) or not re.fullmatch(r'[1-9][0-9]{0,24}', remote_id)):
+        raise PublishError('X 作品身份或账号无效')
+    return 'https://x.com/' + identity[1:] + '/status/' + remote_id
+
+
+def _expand(text, entities):
+    if not isinstance(text, str) or not isinstance(entities, dict):
+        raise PublishError('X 原生完整文字或实体缺失')
+    urls = entities.get('urls', [])
+    if not isinstance(urls, list):
+        raise PublishError('X 原生链接实体无效')
+    encoded = text.encode('utf-16-le'); replacements = []
+    for entity in urls:
+        try:
+            start, end = entity['indices']
+            original, expanded = entity['url'], entity['expanded_url']
+            parts = urlsplit(expanded)
+            if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(encoded)//2
+                    or not isinstance(original, str) or parts.scheme not in {'http', 'https'}
+                    or not parts.netloc or parts.username or parts.password
+                    or encoded[start*2:end*2].decode('utf-16-le') != original):
+                raise ValueError()
+            replacements.append((start, end, expanded))
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise PublishError('X 原生链接位置或展开地址不能核对') from exc
+    replacements.sort()
+    if any(a[1] > b[0] for a, b in zip(replacements, replacements[1:])):
+        raise PublishError('X 原生链接位置重叠')
+    for start, end, expanded in reversed(replacements):
+        encoded = encoded[:start*2] + expanded.encode('utf-16-le') + encoded[end*2:]
+    return html.unescape(encoded.decode('utf-16-le'))
+
+
+def acceptance_identity(result, identity=None):
+    """Retain an actual own-post ID even if later content checks cannot finish."""
+    if not isinstance(result, dict) or result.get('__typename') != 'Tweet':
+        raise PublishError('X 返回的不是可核对的普通作品')
+    legacy = result.get('legacy', {})
+    user = result.get('core', {}).get('user_results', {}).get('result', {})
+    remote_id = result.get('rest_id')
+    handle = user.get('core', {}).get('screen_name') or user.get('legacy', {}).get('screen_name')
+    if (not isinstance(legacy, dict) or remote_id != legacy.get('id_str')
+            or not isinstance(handle, str) or not isinstance(user.get('rest_id'), str)
+            or not re.fullmatch(r'[1-9][0-9]*', user['rest_id'])
+            or legacy.get('user_id_str') != user['rest_id']):
+        raise PublishError('X 原生作品与作者身份缺失或矛盾')
+    status_url('@' + handle, remote_id)
+    value = dict(remote_id=remote_id, identity='@' + handle.lower(), author_id=user['rest_id'])
+    if identity is not None and value['identity'] != identity:
+        raise PublishError('X 受理作品属于其他账号；不绑定该身份')
+    return value
+
+
+def facts(result):
+    """Extract one native Tweet, retaining media and privacy as explicit facts."""
+    value = acceptance_identity(result)
+    legacy = result['legacy']; user = result['core']['user_results']['result']
+    text, entities = legacy.get('full_text'), legacy.get('entities')
+    note = result.get('note_tweet', {}).get('note_tweet_results', {}).get('result')
+    if note is not None:
+        if not isinstance(note, dict):
+            raise PublishError('X 扩展文字结果无效')
+        text, entities = note.get('text'), note.get('entity_set')
+    media = legacy.get('extended_entities', {}).get('media', [])
+    entity_media = legacy.get('entities', {}).get('media', [])
+    if not isinstance(media, list) or not isinstance(entity_media, list):
+        raise PublishError('X 原生媒体列表无效')
+    protected = user.get('privacy', {}).get('protected', user.get('legacy', {}).get('protected'))
+    return dict(value, text=_expand(text, entities),
+                url_mappings=[dict(url=e['url'], expanded_url=e['expanded_url']) for e in entities.get('urls', [])],
+                media_count=max(len(media), len(entity_media)),
+                protected=protected, reply_to=legacy.get('in_reply_to_status_id_str'),
+                quoted=legacy.get('is_quote_status'),
+                reposted=bool(legacy.get('retweeted_status_result')),
+                limited=bool(result.get('limited_actions') or result.get('tweet_interstitial')))
+
+
+def verify_facts(value, pack, identity, *, remote_id=None, author_id=None):
+    if (value['identity'] != identity or (remote_id is not None and value['remote_id'] != remote_id)
+            or (author_id is not None and value['author_id'] != author_id)):
+        raise PublishError('X 原生作品或账号与发送回执不符')
+    if value['text'] != pack['fields']['composed_text']:
+        raise PublishError('X 已受理作品的完整文字或链接与封存内容不符')
+    if (value['media_count'] or value['reply_to'] or value['quoted'] is not False
+            or value['reposted'] or value['limited'] or value['protected'] is not False):
+        raise PublishError('X 普通公开文字帖的媒体、回复、引用或可见性不能核对')
+    return value
+
+
+class Capture:
+    """Persist the actual native acceptance ID before click completion returns."""
+    def __init__(self, pack, identity, save):
+        self.pack, self.identity, self.save = pack, identity, save
+        self.accepted = None; self.error = None; self.count = 0
+
+    def response(self, response):
+        parts = urlsplit(response.url)
+        if (parts.scheme != 'https' or parts.netloc != 'x.com'
+                or not re.fullmatch(r'/i/api/graphql/[^/]+/CreateTweet', parts.path)):
+            return
+        self.count += 1
+        try:
+            if self.count != 1 or response.request.method != 'POST' or response.status != 200:
+                raise PublishError('X 原生投稿响应数量、方法或状态异常')
+            body = response.json()
+            if not isinstance(body, dict) or body.get('errors'):
+                raise PublishError('X 原生投稿返回错误；不重复点击')
+            result = body['data']['create_tweet']['tweet_results']['result']
+            value = acceptance_identity(result, self.identity)
+            self.accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
+            self.save(self.accepted)
+        except Exception:
+            self.error = 'X 原生受理回执未能完整核对或保存；保持未知，不重复点击'
+
+
+def detail_result(body, remote_id):
+    if not isinstance(body, dict) or body.get('errors'):
+        raise PublishError('X 原生作品查询未完成')
+    matches = {}
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get('__typename') == 'Tweet' and node.get('rest_id') == remote_id:
+                matches[digest(node)] = node
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+    instructions = body.get('data', {}).get('threaded_conversation_with_injections_v2', {}).get('instructions')
+    if not isinstance(instructions, list):
+        raise PublishError('X 原生作品查询结构改变')
+    walk(instructions)
+    if len(matches) != 1:
+        raise PublishError('X 独立查询缺少唯一的原作品身份')
+    return facts(next(iter(matches.values())))
+
+
+def readback(anchor, pack, identity, accepted):
+    remote_id = accepted.get('remote_id'); url = status_url(identity, remote_id)
+    bodies = []; errors = []
+    with background_tab(anchor) as page:
+        def observe(response):
+            parts = urlsplit(response.url)
+            if (parts.scheme == 'https' and parts.netloc == 'x.com'
+                    and re.fullmatch(r'/i/api/graphql/[^/]+/TweetDetail', parts.path)):
+                try:
+                    if response.status != 200 or len(bodies) >= 8:
+                        raise ValueError()
+                    bodies.append(response.json())
+                except Exception:
+                    errors.append('native_detail_unavailable')
+        page.on('response', observe)
+        page.goto(url, wait_until='domcontentloaded', timeout=25000)
+        render_background_page(page)
+        page.locator('[data-testid="tweet"]').first.wait_for(state='attached', timeout=20000)
+        if page.url != url or errors or not bodies:
+            raise PublishError('X 原作品页或独立原生查询未就绪；只保留已受理身份')
+        values = []
+        for body in bodies:
+            value = detail_result(body, remote_id)
+            values.append(verify_facts(value, pack, identity, remote_id=remote_id,
+                                       author_id=accepted.get('author_id')))
+        if len({digest(v) for v in values}) != 1:
+            raise PublishError('X 独立作品查询结果不一致')
+        href = '/' + identity[1:] + '/status/' + remote_id
+        articles = page.locator('[data-testid="tweet"]')
+        visible_matches = 0
+        for article in articles.all():
+            # A timestamp permalink belongs to this article; quoted links alone
+            # do not establish which tweet is being inspected.
+            links = article.locator('a[href]').evaluate_all(
+                'ns=>ns.filter(a=>a.querySelector("time")).map(a=>a.getAttribute("href"))')
+            if sum(isinstance(link, str) and link.lower() == href for link in links) != 1:
+                continue
+            if not article.is_visible():
+                continue
+            text = article.locator('[data-testid="tweetText"]')
+            if text.count() != 1 or not text.inner_text().strip():
+                raise PublishError('X 原作品正文未真实渲染')
+            rendered = text.evaluate(RENDERED, values[0]['url_mappings'])
+            if rendered != pack['fields']['composed_text']:
+                raise PublishError('X 原作品可见完整文案或原生链接与封存内容不符')
+            if article.locator('[data-testid="tweetPhoto"],video,[data-testid="videoPlayer"]').count():
+                raise PublishError('X 文字帖原生作品页出现未交接媒体')
+            visible_matches += 1
+        if visible_matches != 1:
+            raise PublishError('X 作品页没有唯一可见的原作品正文')
+        return dict(remote_url=url, observed_at=time.time(), native_detail_digest=digest(bodies),
+                    content_verified=True, verified_pack_digest=digest(pack), author_id=values[0]['author_id'])
+
+
+RENDERED = r'''(root, mappings) => {
+  const known=new Map();
+  for(const m of mappings){
+    for(const key of [m.url,m.expanded_url]){
+      if(known.has(key)&&known.get(key)!==m.expanded_url)throw Error('ambiguous link');
+      known.set(key,m.expanded_url);
+    }
+  }
+  const visit=node=>{
+    if(node.nodeType===Node.TEXT_NODE)return node.data;
+    if(node.nodeType!==Node.ELEMENT_NODE)return '';
+    if(node.tagName==='BR')return '\n';
+    if(node.tagName==='IMG'){
+      if(!node.alt)throw Error('missing emoji');
+      return node.alt;
+    }
+    if(node.tagName==='A'){
+      const href=node.getAttribute('href');
+      if(known.has(href))return known.get(href);
+      if(/^https?:/.test(href||'')&&new URL(href).hostname!=='x.com')throw Error('unmatched link');
+    }
+    return Array.from(node.childNodes).map(visit).join('');
+  };
+  return visit(root);
+}'''
