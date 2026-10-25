@@ -103,7 +103,9 @@ def reconcile(content,slots,assets,receipt,*,manifest_digest,remote_id):
         fingerprint=row.get('component_sha256')
         if not fingerprint or fingerprint in replacements:
             raise PublishError('播放器指纹缺失或重复；相同组件需单独适配，不猜对应位置')
-        info=infos.get(fingerprint,{})
+        if fingerprint not in infos:
+            raise PublishError('播放器指纹与当前读回不符；先核对媒体身份、源素材和全文，再刷新观察回执')
+        info=infos[fingerprint]
         kind='audio' if info.get('tag') in {'mpvoice','mpaudio','mp-common-mpaudio'} else 'video'
         if kind!=asset['kind']:
             raise PublishError('实际播放器类型与源素材不符')

@@ -183,6 +183,22 @@ class WechatTests(unittest.TestCase):
         with self.assertRaisesRegex(PublishError,'类型'):
             reconcile('前'+video+'中【发布媒体:b】后',slots,assets,receipt,manifest_digest='fixture',remote_id='draft-fixture')
 
+    def test_reserialized_player_requires_fresh_evidence_even_with_same_identity(self):
+        from wechat_media import reconcile
+        for kind,tag,attribute in [('audio','mpaudio','voice_encode_fileid'),('video','mpvideo','vid')]:
+            with self.subTest(kind=kind):
+                before=f'<{tag} {attribute}="fixture-id"></{tag}>'
+                after=f'<{tag} class="native-preview" {attribute}="fixture-id"></{tag}>'
+                row=dict(slot_id='slot',kind=kind,asset_sha256='source',remote_media_id='fixture-id',
+                         remote_id_attribute=attribute,upload_evidence='fixture',saved=True,reopened=True,
+                         loaded=True,played=True,component_sha256=hashlib.sha256(before.encode()).hexdigest())
+                receipt=dict(manifest_digest='fixture',remote_id='draft-fixture',components=[row])
+                slots=[dict(id='slot',asset_id='asset')]; assets={'asset':dict(kind=kind,sha256='source')}
+                with self.assertRaisesRegex(PublishError,'播放器指纹与当前读回不符'):
+                    reconcile('前'+after+'后',slots,assets,receipt,manifest_digest='fixture',remote_id='draft-fixture')
+                # A matching ID alone never refreshes the receipt implicitly.
+                self.assertEqual(row['component_sha256'],hashlib.sha256(before.encode()).hexdigest())
+
     def test_visual_review_is_bound_to_actual_html(self):
         dispatch(self.request,self.profile,self.api,action='execute'); self.visual_receipt()
         self.api.articles['draft-fixture']['content']='<span style="display:none">标题正文</span>'
