@@ -172,11 +172,31 @@ class WeiboSendTests(unittest.TestCase):
         def persist(path,value):
             if value.get('native_input_checkpointed_at'):raise OSError('checkpoint write failed')
             write_json(path,value)
-        with patch.object(publisher,'write_json',side_effect=persist):
+        with patch.object(publisher,'write_json',side_effect=persist), \
+                patch.object(publisher.time,'monotonic',side_effect=[0,21]):
             try:run(self.path,'weibo',self.profile,self.store)
             except (OSError,PublishError):pass
         self.assertEqual(self.page.clicks,0)
-        self.assertEqual(read_json(home.marker_path(self.request))['click_error_phase'],'before_native_input')
+        self.assertEqual(read_json(home.marker_path(self.request)).get('click_error_phase'),'before_native_input')
+
+    def test_receipt_write_failure_cannot_resurrect_acceptance_in_final_save(self):
+        writes=[]
+        def persist(path,value):
+            if value.get('accepted'):
+                writes.append(copy.deepcopy(value))
+                if len(writes)==1:raise OSError('first receipt checkpoint failed')
+            write_json(path,value)
+        with patch.object(publisher,'write_json',side_effect=persist):
+            with self.assertRaisesRegex(PublishError,'结果未知'):
+                run(self.path,'weibo',self.profile,self.store)
+        saved=read_json(home.marker_path(self.request))
+        self.assertEqual(len(writes),1)
+        self.assertNotIn('accepted',saved);self.assertEqual(saved['state'],'submission_unknown')
+        self.assertTrue(saved.get('receipt_error'));self.assertEqual(self.page.closes,0)
+        self.assertIsNone(self.store.status(self.key)['remote_id'])
+        with self.assertRaisesRegex(PublishError,'受理身份'):
+            run(self.path,'weibo',self.profile,self.store,resume=True)
+        self.assertEqual(self.page.clicks,1);self.assertEqual(len(self.page.uploads),2)
 
     def test_content_changes_at_last_input_guard_stops_without_native_click(self):
         self.mode='change_at_input'
@@ -219,6 +239,38 @@ class WeiboSendTests(unittest.TestCase):
 
 
 class WeiboReceiptTests(unittest.TestCase):
+    def test_submit_attempt_save_failure_keeps_original_memory_and_never_clicks(self):
+        page=Composer();saved={'state':'filled'};before=copy.deepcopy(saved)
+        with patch.object(publisher,'ready',return_value=Node(page,'card')), \
+                patch.object(publisher,'write_json',side_effect=OSError('attempt save failed')), \
+                patch.object(publisher,'click_background') as click:
+            with self.assertRaises(OSError):
+                publisher.submit_once(page,{},UID,saved,Path('/unused'))
+        self.assertEqual(saved,before);click.assert_not_called()
+
+    def test_checkpoint_memory_only_advances_after_successful_persistence(self):
+        for changes in [dict(state='submission_unknown',submission_attempted_at=123),
+                        dict(native_input_checkpointed_at=124),
+                        dict(state='accepted',accepted={'remote_id':'9876543210'})]:
+            with self.subTest(changes=changes):
+                saved={'state':'filled'};before=copy.deepcopy(saved)
+                with patch.object(publisher,'write_json',side_effect=OSError('disk full')):
+                    with self.assertRaises(OSError):publisher.checkpoint(saved,Path('/unused'),**changes)
+                self.assertEqual(saved,before)
+                with patch.object(publisher,'write_json') as persist:
+                    publisher.checkpoint(saved,Path('/unused'),**changes)
+                persist.assert_called_once_with(Path('/unused'),dict(before,**changes))
+                self.assertEqual(saved,dict(before,**changes))
+
+    def test_capture_does_not_expose_identity_before_it_is_durable(self):
+        def save(value):
+            self.assertIsNone(capture.accepted)
+            raise OSError('receipt write failed')
+        capture=publisher.Capture(UID,save);capture.response(Response(body()))
+        self.assertIsNone(capture.accepted);self.assertIsNotNone(capture.error)
+        capture.response(Response(body()))
+        self.assertEqual(capture.count,2);self.assertIsNone(capture.accepted)
+
     def test_only_exact_native_acceptance_stores_identity_without_content_claim(self):
         observed=[];capture=publisher.Capture(UID,observed.append);result=body();del result['text_raw']
         capture.response(Response(result));self.assertEqual(observed[0]['remote_id'],'9876543210')

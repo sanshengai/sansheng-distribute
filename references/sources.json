@@ -184,7 +184,7 @@
   "native_observations": [
     {
       "platform": "weibo_video",
-      "reviewed_at": "2026-10-25",
+      "reviewed_at": "2026-10-26",
       "creator_url": "https://weibo.com/upload/channel",
       "assets": [
         {
@@ -194,9 +194,18 @@
         {
           "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/VideoUpload-Big839Ru.js",
           "sha256": "197fbe689100d62a572f506c73eb9875cf80152af9a54f519a276ddc7f2e4b0c"
+        },
+        {
+          "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/VideoPublish-KLYDS59Y.js",
+          "sha256": "37751e95064d7abbfb8e2da7301cf9fc4f426496246273001309caef3c68e48a"
+        },
+        {
+          "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/Audio-pOxEHIg3.js",
+          "sha256": "13bbe7421d3095e1d16737954a3fcdbf77a1289a5cdf9658bae5d95cf8e0fd05"
         }
       ],
-      "adoption": "Observed native route, delayed SDK binding, detached video chooser, current File and cloud receipts, separate creation/content declarations, paired plain-text topics, cover crop and upload PID contract. Independent bundled video prefill and read-only recovery validated; no frontend source vendored and no public submission capability claimed."
+      "adoption": "Observed native route, delayed SDK binding, detached video chooser, current File and cloud receipts, separate creation/content declarations, paired plain-text topics, cover crop and upload PID contract. Independent bundled video prefill and read-only recovery validated; no frontend source vendored and no public submission capability claimed.",
+      "submission_review": "Static source review only: native feature flag selects V2 VideoPublish or legacy Audio; serialized media is passed to the shared composer, and incomplete uploads can choose automatic publication. Native completion/media_id does not establish a public post ID. No video sender enabled, no live upload/submission, no frontend source vendored."
     },
     {
       "platform": "x_images_upload",

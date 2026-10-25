@@ -13,6 +13,13 @@ import weibo_browser as home
 import weibo_post as post
 
 
+def checkpoint(saved, marker, **changes):
+    """Do not advance in-memory acceptance before the original marker is durable."""
+    value = dict(saved, **changes)
+    write_json(marker, value)
+    saved.update(value)
+
+
 class Capture:
     """Observe the native UI response; never replay/construct a private request."""
     def __init__(self, uid, save):
@@ -31,8 +38,9 @@ class Capture:
                     or not isinstance(body.get('data'), dict) or body['data'].get('verify')):
                 raise PublishError('微博原生发送未受理或需要本人验证')
             value = post.identity(body['data'], self.uid)
-            self.accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
-            self.save(self.accepted)  # Actual post identity precedes click completion.
+            accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
+            self.save(accepted)  # Actual post identity precedes click completion.
+            self.accepted = accepted
         except Exception:
             self.error = '微博原生受理身份未能完整核对或保存；不重复发送'
 
@@ -57,19 +65,15 @@ def submit_once(page, pack, uid, saved, marker):
     button = card.get_by_role('button', name='发送', exact=True)
     if button.count() != 1 or not button.is_visible() or button.is_disabled():
         raise PublishError('微博发送按钮不唯一、不可见或禁用')
-    saved.update(submission_attempted_at=time.time(), state='submission_unknown')
-    write_json(marker, saved)
+    checkpoint(saved, marker, submission_attempted_at=time.time(), state='submission_unknown')
 
     def accepted(value):
-        saved.update(accepted=value, state='accepted')
-        write_json(marker, saved)
+        checkpoint(saved, marker, accepted=value, state='accepted')
 
     capture = Capture(uid, accepted); page.on('response', capture.response)
     def before_input():
         ready(page, pack, uid, saved)
-        checkpoint = dict(saved, native_input_checkpointed_at=time.time())
-        write_json(marker, checkpoint)
-        saved.update(checkpoint)
+        checkpoint(saved, marker, native_input_checkpointed_at=time.time())
     try:
         ready(page, pack, uid, saved)
         try:
