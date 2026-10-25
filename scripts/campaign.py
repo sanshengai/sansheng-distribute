@@ -108,7 +108,7 @@ def campaign_status(campaign_id, store):
             row.update(state="blocked", error=str(exc), next_action="inspect", author_action=None)
         report["targets"].append(row)
         report["counts"][row["state"]] = report["counts"].get(row["state"], 0) + 1
-    report["all_endpoints_reached"] = all(x["state"] in FINISHED for x in report["targets"])
+    report["all_endpoints_reached"] = all(x["state"] in FINISHED and "error" not in x for x in report["targets"])
     return report
 
 
@@ -184,7 +184,7 @@ def run_campaign(campaign_id, profile, store, target_ids=None, *, resume=False, 
         error_path = store.directory / "campaigns" / campaign_id / f"{ident}.json"
         try:
             job = _job(store, manifest, ident)
-            if job["state"] in FINISHED:
+            if job["state"] in FINISHED and not (job["state"] == "prefill_ready" and store.needs_live_readback(job["key"])):
                 outcomes[ident] = "already_complete"
                 continue
             if resume and job["state"] == "prepared":

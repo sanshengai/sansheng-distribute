@@ -255,8 +255,8 @@ def initialize(path, *, platforms=(), account='main', write_scripts=None, env_fi
         raise EnvironmentError('账号别名不能为空')
     if set(platforms) - set(PLATFORMS):
         raise EnvironmentError('存在不支持的平台名称')
-    if (not isinstance(browser_engines, (list, tuple)) or any(p != 'x' or p not in platforms for p in browser_engines)):
-        raise EnvironmentError('当前内置浏览器仅可显式选择已配置的 x 文本预填')
+    if (not isinstance(browser_engines, (list, tuple)) or any(p not in {'x', 'weibo'} or p not in platforms for p in browser_engines)):
+        raise EnvironmentError('当前内置浏览器仅可显式选择已配置的 x 文本或 weibo 图文预填')
     if browser_engines and (not browser_profile or not browser_cdp_url):
         raise EnvironmentError('内置浏览器需要专用 profile 与实际本机 CDP 端点')
     if browser_cdp_url is not None:

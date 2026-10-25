@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundled bounded browser actions. X text prefill only; no final-click path.
+"""Bundled bounded browser actions; no final-click path.
 
 Editor identities are Chrome session targets, not persistent platform draft IDs.
 Losing that session keeps the result unknown; it never authorizes another fill.
@@ -21,8 +21,11 @@ from publish_core import PublishError, digest, read_json, write_json
 
 
 def settings(profile, target):
+    if target['platform'] == 'weibo':
+        from weibo_browser import settings as weibo_settings
+        return weibo_settings(profile, target)
     if target['platform'] != 'x':
-        raise PublishError('当前内置浏览器引擎只实现 X 文本预填；其他平台使用现役接力')
+        raise PublishError('当前内置浏览器引擎只实现 X 文本与微博图文预填；其他平台使用现役接力')
     account = profile.get('accounts', {}).get(target['account'], {})
     identity = account.get('public_identities', {}).get('x')
     if 'x' not in account.get('platforms', []) or not isinstance(identity, str) or not re.fullmatch(r'@[A-Za-z0-9_]{1,15}', identity):
@@ -32,6 +35,9 @@ def settings(profile, target):
 
 
 def check_pack(pack):
+    if pack['platform'] == 'weibo':
+        from weibo_browser import check_pack as check_weibo
+        return check_weibo(pack)
     if pack['platform'] != 'x' or pack['endpoint'] != 'prefill' or pack['content_type'] != 'text':
         raise PublishError('当前引擎仅承接 X text:prefill，不能公开发送或假称支持媒体')
     document = pack['document']
@@ -60,7 +66,7 @@ def preflight_browser(manifest, target, profile, argv):
     result = inspect(profile)
     if not result['ok'] or not result.get('python'):
         raise PublishError('先用 setup.py --prepare-runtime 准备所选浏览器依赖')
-    return {'local_only':True, 'implemented':'x text:prefill', 'final_click_available':False}
+    return {'local_only':True, 'implemented':target['platform']+' '+target['content_type']+':prefill', 'final_click_available':False}
 
 
 def assert_identity(page, expected):
@@ -124,6 +130,9 @@ def marker_path(request_path):
 
 
 def dispatch(request_path, action, profile, lock_fd):
+    if read_json(request_path).get('target', {}).get('platform') == 'weibo':
+        from weibo_browser import dispatch as dispatch_weibo
+        return dispatch_weibo(request_path, action, profile, lock_fd)
     if action not in {'execute','verify'}:
         raise PublishError('不支持的浏览器阶段')
     try: os.fstat(lock_fd)
@@ -194,8 +203,14 @@ def main(argv=None):
             return subprocess.run(command,pass_fds=(fd,)).returncode
         print(json.dumps(dispatch(args.request,args.action,profile,fd),ensure_ascii=False));return 0
     except Exception as exc:
-        print(json.dumps({'ok':False,'error':str(exc) if isinstance(exc,PublishError) else
-            '浏览器执行或读回未完成；保留原编辑会话，先查询，不重试填稿'},ensure_ascii=False));return 2
+        failure = {'ok':False, 'error_type':type(exc).__name__,
+            'error':str(exc) if isinstance(exc,PublishError) else
+            '浏览器执行或读回未完成；保留原编辑会话，先查询，不重试填稿'}
+        # Core intentionally does not echo arbitrary child output. Persist this
+        # bounded message privately so the failed stage remains diagnosable.
+        try: write_json(Path(args.request).with_suffix('.browser-error.json'), dict(failure, action=args.action))
+        except OSError: pass
+        print(json.dumps(failure,ensure_ascii=False));return 2
 
 
 if __name__=='__main__':raise SystemExit(main())

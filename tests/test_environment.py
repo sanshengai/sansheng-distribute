@@ -140,6 +140,22 @@ class EnvironmentTests(unittest.TestCase):
             with self.assertRaises(env.EnvironmentError): env.initialize(bad, platforms=platforms, bilibili_cli=cli)
             self.assertFalse(bad.exists())
 
+    def test_weibo_bundled_initialization_is_explicit_and_inactive(self):
+        path=self.home/'weibo/profile.json'
+        env.initialize(path,platforms=['weibo'],public_identities={'weibo':'123456789'},
+            browser_profile=self.home/'chrome',browser_engines=['weibo'],
+            browser_cdp_url='http://127.0.0.1:9333')
+        value=env.load_profile(path);adapter=value['adapters']['weibo']
+        self.assertEqual(adapter['enabled_capabilities'],[]);self.assertFalse(adapter['enabled'])
+        self.assertIn(str(ROOT/'scripts/browser_engine.py'),adapter['execute'])
+        self.assertNotIn('x',value['adapters']);self.assertFalse((self.home/'chrome').exists())
+        with patch('runtime.inspect',return_value={'ok':True}), patch.object(env.shutil,'which',return_value='/available'):
+            self.assertTrue(env.doctor(self.paths(profile=path),environ={})['ok'])
+        absent=self.home/'bad-weibo.json'
+        with self.assertRaises(env.EnvironmentError):
+            env.initialize(absent,platforms=['x'],browser_engines=['weibo'])
+        self.assertFalse(absent.exists())
+
     def test_prepare_tools_uses_only_selected_cli_and_never_logs_in(self):
         spec = importlib.util.spec_from_file_location('distribute_setup_tools', ROOT/'setup.py')
         setup = importlib.util.module_from_spec(spec); spec.loader.exec_module(setup)
