@@ -91,8 +91,10 @@ class BilibiliAdapterTests(unittest.TestCase):
         value = run(self.path,'bili',self.profile,self.store,resume=True)
         self.assertEqual(value['state'],'published')
         self.assertEqual(self.calls,['execute','verify','verify'])
-        run(self.path,'bili',self.profile,self.store,resume=True)
-        self.assertEqual(self.calls,['execute','verify','verify'])
+        value=run(self.path,'bili',self.profile,self.store,resume=True)
+        self.assertEqual(value['state'],'published')
+        self.assertEqual(value['remote_id'],'7')
+        self.assertEqual(self.calls,['execute','verify','verify','verify'])
 
     def test_cli_failure_after_accepted_id_does_not_lose_id_or_repost(self):
         with self.cli.open('a') as stream: stream.write('sys.exit(1)\n')

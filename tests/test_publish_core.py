@@ -176,6 +176,49 @@ print(json.dumps({'manifest_digest':r['manifest_digest'],'target_id':t['id'],'pl
         with self.assertRaisesRegex(PublishError, 'exit=5'): run(path, 'wechat', self.profile(script), self.store)
         with self.assertRaisesRegex(PublishError, '不重复提交'): run(path, 'wechat', self.profile(script), self.store)
 
+    def test_explicit_resume_rechecks_completed_draft_without_execution_or_sources(self):
+        script = self.root/'readonly_adapter.py'
+        script.write_text('''import json,sys
+from pathlib import Path
+r=json.loads(Path(sys.argv[-1]).read_text()); t=r['target']
+p=Path(__file__).with_name('actions.json')
+calls=json.loads(p.read_text()) if p.exists() else []
+calls.append(sys.argv[1]); p.write_text(json.dumps(calls))
+state=Path(__file__).with_name('remote-state.txt').read_text()
+print(json.dumps(dict(manifest_digest=r['manifest_digest'],target_id=t['id'],platform=t['platform'],account=t['account'],remote_id='draft-1',state=state,content_verified=state=='draft_ready')))
+''')
+        remote = self.root/'remote-state.txt'; remote.write_text('draft_ready')
+        path = self.root/'manifest.json'; write_json(path,self.manifest)
+        self.authorize(); profile=self.profile(script)
+        self.assertEqual(run(path,'wechat',profile,self.store)['state'],'draft_ready')
+        self.assertEqual(run(path,'wechat',profile,self.store)['state'],'draft_ready')
+        self.assertEqual(json.loads((self.root/'actions.json').read_text()),['execute','verify'])
+        # The platform has changed since success; explicit resume must observe it.
+        remote.write_text('pending')
+        (self.root/'article.html').unlink(); (self.root/'theme.mp3').unlink()
+        profile['accounts']['main']['restricted']=True
+        result=run(path,'wechat',profile,self.store,resume=True)
+        self.assertEqual(result['state'],'pending')
+        self.assertEqual(result['remote_id'],'draft-1')
+        self.assertEqual(json.loads((self.root/'actions.json').read_text()),['execute','verify','verify'])
+
+    def test_failed_remote_read_does_not_return_old_completed_status(self):
+        self.authorize(); self.store.begin(self.manifest,'wechat')
+        self.store.save_observation(self.key,self.observation(),verified=True)
+        script=self.root/'missing_draft.py'
+        script.write_text('''import sys
+from pathlib import Path
+assert sys.argv[1]=='verify', 'readback must never execute again'
+Path(__file__).with_name('queried.txt').write_text('queried once')
+print('remote draft unavailable'); raise SystemExit(2)
+''')
+        path=self.root/'manifest.json'; write_json(path,self.manifest)
+        with self.assertRaisesRegex(PublishError,'exit=2'):
+            run(path,'wechat',self.profile(script),self.store,resume=True)
+        self.assertEqual((self.root/'queried.txt').read_text(),'queried once')
+        # Keep the historical observation, but never return it as a fresh success.
+        self.assertEqual(self.store.status(self.key)['remote_id'],'draft-1')
+
     def test_adapter_timeout_stops_grandchild_even_if_it_ignores_term(self):
         from publish_core import invoke
         child = self.root/'late_child.py'

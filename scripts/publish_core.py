@@ -625,7 +625,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if store.db.execute('SELECT 1 FROM jobs WHERE platform=? AND account=? AND remote_id=? AND key<>?',
                             (job['platform'], job['account'], recover_remote_id, key)).fetchone():
             raise PublishError('候选草稿已归属其他发布任务')
-    if job["state"] in {"draft_ready", "prefill_ready", "published", "broadcasted"}:
+    if not resume and job["state"] in {"draft_ready", "prefill_ready", "published", "broadcasted"}:
         if job['state'] == 'prefill_ready' and store.needs_live_readback(key):
             # A local editor target is not a saved platform draft. Recheck that
             # exact session on every reuse; never silently refill a lost editor.
