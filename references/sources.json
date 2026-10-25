@@ -30,11 +30,63 @@
       "commit": "7797fd375aba02dcd33afe143f6bee13e5870859",
       "license": "Apache-2.0",
       "scope": [
-        "video publish flow",
-        "prefill distinction",
-        "risk and open PR review"
+        "MCP entry to video upload and final submit",
+        "result body and redirect success boundary",
+        "creator session and topic selection",
+        "humanized input and upload-test boundaries"
       ],
-      "adoption": "audit only; no executable or copied code installed; video MCP final click is incompatible with author-only submission"
+      "adoption": "Audit only; no prefill endpoint in reviewed video path and no stable post ID in response; incompatible with author-only final click. Study session/readiness and native topic flow but reject cookie-only identity, first-topic fallback and anti-risk claims. Restricted accounts remain local-only; no browser trial.",
+      "reviewed_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "9d8b162d4b4822b793666e2a8cb6c94df7ecdb8204f23a20e6042f93e691cb0d"
+        },
+        {
+          "path": "go.mod",
+          "sha256": "5b55533c87b410667d7787187e97e8059e46914cb7c84b0ac543615fabc711b2"
+        },
+        {
+          "path": "mcp_handlers.go",
+          "sha256": "ba4b4d48620f1f3fd3c8260417383f35ac9c2a8bacf4c480af7c4a085580d11c"
+        },
+        {
+          "path": "service.go",
+          "sha256": "7946b0d2571328e4a80ef73a783263181e95471c3241331336c4748181e15c7c"
+        },
+        {
+          "path": "xiaohongshu/publish_video.go",
+          "sha256": "aa2a9252653ebd13ae391a9d99f5521b5798b425a63dbbc711a71abf662b3b2d"
+        },
+        {
+          "path": "xiaohongshu/publish.go",
+          "sha256": "01403025261f444f4e2a636ea1caf9ee85a5041de644ea6d696e1f162aaace23"
+        },
+        {
+          "path": "xiaohongshu/creator_session.go",
+          "sha256": "be939563596483cb2a13ce6387c5592aa81d0df425ba79971034d05a14b18750"
+        },
+        {
+          "path": "xiaohongshu/publish_test.go",
+          "sha256": "281b31c6d2833d71cc55651ab2d8a8e74595f0953fe503368e1669f849a47fe3"
+        },
+        {
+          "path": "xiaohongshu/publish_upload_test.go",
+          "sha256": "67e85b8b4aa48367a00b0380448ddf1e66c3d6b9a9d7b9779175293a6ab910d6"
+        },
+        {
+          "path": "humanize/input.go",
+          "sha256": "9b98af48b7a794c67b5966a04d4cf7fc126504573fe51d4b45a7905aab15fdfb"
+        },
+        {
+          "path": "humanize/mouse.go",
+          "sha256": "b20a531fd333c7368def82bfee6b785f1ec21d9b67ebd3ea2a2983fcdb871f81"
+        },
+        {
+          "path": "humanize/delay.go",
+          "sha256": "843a4528c86e837a74f5fe70cf2e77cac75bb4360ef9754f6b22d6fb29c878e3"
+        }
+      ],
+      "review_kind": "fixed source and license review only; no uploader or service installed/executed; no executable code vendored"
     },
     {
       "repository": "https://github.com/biliup/biliup",
@@ -49,6 +101,84 @@
         "controlled adapter acceptance log and independent readback"
       ],
       "adoption": "optional private binary download; no binary or source vendored; in-package controlled adapter is disabled pending its own real-upload acceptance"
+    },
+    {
+      "repository": "https://github.com/sfdenibao/social-publish-mcp",
+      "commit": "5885a9afc14d7d685165d27f243ce8370888f0a9",
+      "license": "MIT",
+      "reviewed_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "8fd1171ac198090942b3e7f15887ec682cf010227e7afe74ee97f57351fd9f36"
+        },
+        {
+          "path": "pyproject.toml",
+          "sha256": "100f8e7ebbbc002e95c87e695550e74b1d4ff70ba72ea71c46840a5f9c23f349"
+        },
+        {
+          "path": "utils/publish_ledger.py",
+          "sha256": "3b3ac975570669e46f976bfd1df3550d53945d5f6b6dfef2a0f51144e5bca467"
+        },
+        {
+          "path": "utils/publish_worker.py",
+          "sha256": "c7db09d717ca7c21bf038004e8e589c4e7fe9e134f3ed9efa286d19fffe2f927"
+        },
+        {
+          "path": "utils/publish_dispatch.py",
+          "sha256": "a07845d624ddcf7b67af7713479e9b4f8128e3df48a81c2446bba54431a44efd"
+        },
+        {
+          "path": "utils/mcp_publish_adapters.py",
+          "sha256": "503ce6f3a8d5650f82e2f6e5517c07aacc62ac9fac195c8db3e69412f39a0e5f"
+        },
+        {
+          "path": "tests/test_publish_ledger.py",
+          "sha256": "f9b38f0561a50642a7b8ab4087af490267d09ed31413679117e4f918ee7c2ea0"
+        },
+        {
+          "path": "tests/test_tencent_management_result.py",
+          "sha256": "53dff8192f5497aa2279848b3634dffa4779226ee0ce695a830d383febefa958"
+        }
+      ],
+      "review_kind": "fixed source and license review only; no uploader or service installed/executed; no executable code vendored",
+      "scope": [
+        "durable pre-submit guard",
+        "bounded worker and account/profile conflict resources",
+        "WeChat Channels and Xiaohongshu result verification",
+        "ledger and management-result tests"
+      ],
+      "adoption": "Study pre-submit uncertainty persistence, recovery and resource conflict concepts in existing core; reject title/time-only identity, second SQLite ledger, service layer and separate runtime stack; no platform capability accepted from source review"
+    },
+    {
+      "repository": "https://github.com/rehatRobot/omnipost",
+      "commit": "23f30666e0fbbfc6373ed97394daea82acb0a0e5",
+      "license": "MIT",
+      "reviewed_files": [
+        {
+          "path": "LICENSE",
+          "sha256": "f26e33ca7550ee8e0679b444766c1ec8f4eab02cb3406a7019c6784162539b2a"
+        },
+        {
+          "path": "uploader/tencent_uploader/main.py",
+          "sha256": "475f8f35943e0a673b14b6001222d587c6dddd88655beca0644291db86adfd3b"
+        },
+        {
+          "path": "uploader/douyin_uploader/main.py",
+          "sha256": "3634a568c0fb7f9b56d2e88420b637fe6a59fdea2938401fdf06d42f0f50328a"
+        },
+        {
+          "path": "uploader/xiaohongshu_uploader/main.py",
+          "sha256": "34ddef9bbb85788a358ccf35227b00bc52d1646277a281827a4a32f445e0bd44"
+        }
+      ],
+      "review_kind": "fixed source and license review only; no uploader or service installed/executed; no executable code vendored",
+      "scope": [
+        "SAU method-body AST comparison in three uploaders",
+        "independent AI declarations",
+        "WeChat Channels collection and unfinished note methods",
+        "upload timeout and repeated/forced submission"
+      ],
+      "adoption": "Study declaration fields; do not duplicate SAU ancestor code or treat it as independent reliability evidence; reject missing collection implementation, skipped required declarations, force/JS clicks, repeated submit and redirect-only success"
     }
   ],
   "native_observations": [

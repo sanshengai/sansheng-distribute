@@ -207,6 +207,8 @@ I'm **sansheng**, a creator building content and tools with AI. These skills gro
 - [宝玉 / baoyu-skills](https://github.com/JimLiu/baoyu-skills)：借鉴公众号、X 与微博的发布流程；审阅版本采用 MIT。未捆绑上游执行代码。
 - [dreammis / social-auto-upload](https://github.com/dreammis/social-auto-upload)：多平台视频上传的调研来源；审阅仓库采用 MIT，总 Skill 标注 MIT-0。本项目不捆绑或默认安装该工具，也不把其微信视频号适配当作腾讯视频支持。
 - [sansheng-write](https://github.com/sanshengai/sansheng-write)（MIT）：内置公众号 API 与白名单出口模块的来源，保留 MIT 许可与文件来源锁；文章创作和排版仍由生产端负责。
+- [sfdenibao / social-publish-mcp](https://github.com/sfdenibao/social-publish-mcp) 与 [rehatRobot / omnipost](https://github.com/rehatRobot/omnipost)（MIT）：提交前记账、调度与平台字段的源码对照来源；不捆绑其服务、队列或上传器。
+- [xpzouying / xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)（Apache-2.0）：登录、上传、话题与提交边界的审查来源；不捆绑或调用其最终发布路径，也不据此承诺免风控。
 
 Reviewed upstream revisions and adoption scope are recorded in [sources.json](references/sources.json). Bundled WeChat modules retain their MIT attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Other reviewed publisher projects are not bundled as separate Skills or services. Optional browser dependencies and the pinned Bilibili tool are prepared through this package's setup entrypoint.
 
