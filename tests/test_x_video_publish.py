@@ -143,6 +143,22 @@ class XVideoPublicationTests(unittest.TestCase):
         with self.assertRaises(PublishError):run(self.path,'x',self.profile,self.store)
         self.assertEqual(self.page.uploads,[]);self.assertEqual(self.clicks,0)
 
+    def test_last_input_guard_rechecks_video_before_click_without_reupload(self):
+        click=publisher.click_background.side_effect
+        def changed(page,button,*,before_input):
+            page.video['sha256']='0'*64
+            return click(page,button,before_input=before_input)
+        with patch.object(publisher,'click_background',side_effect=changed):
+            with self.assertRaisesRegex(PublishError,'原生点击前'):
+                run(self.path,'x',self.profile,self.store)
+        saved=read_json(engine.marker_path(self.request))
+        self.assertEqual(saved['click_error_phase'],'before_native_input')
+        self.assertNotIn('native_input_checkpointed_at',saved)
+        self.assertEqual((self.clicks,len(self.page.uploads)),(0,1))
+        with self.assertRaisesRegex(PublishError,'受理身份'):
+            run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual((self.clicks,len(self.page.uploads)),(0,1))
+
 
 class VideoFactsTests(unittest.TestCase):
     def setUp(self):

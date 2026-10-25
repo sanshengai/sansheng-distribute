@@ -50,9 +50,11 @@ def submit_once(page, pack, identity, saved, marker):
     capture = x_post.Capture(pack, identity, accepted)
     page.on('response', capture.response)
     def before_input():
+        ready()
         # A checkpoint means input may happen next, never that X accepted it.
-        saved['native_input_checkpointed_at'] = time.time()
-        write_json(marker, saved)
+        checkpoint = dict(saved, native_input_checkpointed_at=time.time())
+        write_json(marker, checkpoint)
+        saved.update(checkpoint)
     try:
         ready()
         try:

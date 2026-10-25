@@ -271,6 +271,41 @@ class XPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(PublishError,'受理身份'):run(self.path,'x',self.profile,self.store,resume=True)
         self.assertEqual(self.page.clicks,0)
 
+    def test_failed_checkpoint_write_is_before_input_and_never_retries(self):
+        def persist(path,value):
+            if value.get('native_input_checkpointed_at'):
+                raise OSError('checkpoint unavailable')
+            write_json(path,value)
+        with patch.object(publisher,'write_json',side_effect=persist), \
+                patch.object(publisher.time,'monotonic',side_effect=[0,21]):
+            with self.assertRaises((PublishError,OSError)):
+                run(self.path,'x',self.profile,self.store)
+        saved=read_json(engine.marker_path(self.request))
+        self.assertEqual(saved.get('click_error_phase'),'before_native_input')
+        self.assertNotIn('native_input_checkpointed_at',saved)
+        self.assertNotIn('click_reply_unknown',saved)
+        self.assertEqual(self.page.clicks,0)
+        with self.assertRaisesRegex(PublishError,'受理身份'):
+            run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual(self.page.clicks,0)
+
+    def test_last_input_guard_preserves_changed_author_text_without_sending(self):
+        click=publisher.click_background.side_effect
+        def changed(page,button,*,before_input):
+            page.text='author changed this before native input'
+            return click(page,button,before_input=before_input)
+        with patch.object(publisher,'click_background',side_effect=changed):
+            with self.assertRaisesRegex(PublishError,'原生点击前'):
+                run(self.path,'x',self.profile,self.store)
+        saved=read_json(engine.marker_path(self.request))
+        self.assertEqual(saved['click_error_phase'],'before_native_input')
+        self.assertNotIn('native_input_checkpointed_at',saved)
+        self.assertEqual(self.page.text,'author changed this before native input')
+        self.assertEqual(self.page.clicks,0)
+        with self.assertRaisesRegex(PublishError,'受理身份'):
+            run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual((self.page.clicks,len(self.page.writes)),(0,1))
+
     def test_same_handle_different_author_or_wrong_permalink_cannot_verify(self):
         self.detail.result['core']['user_results']['result']['rest_id']='789'
         self.detail.result['legacy']['user_id_str']='789'
