@@ -6,7 +6,7 @@ Never use this observation alone to mark a core job content_verified.
 from __future__ import annotations
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from browser_runtime import background_window, click_background
 from publish_core import PublishError, digest
@@ -92,19 +92,25 @@ def observe_visible(page, value):
             or not card.get_by_text('已发布', exact=True).is_visible()
             or cover_uri(cover.evaluate('n=>getComputedStyle(n).backgroundImage')) != value['cover_uri']):
         raise PublishError('抖音可见卡片的封面或发布状态与原生响应不符')
+    return card
 
 
-def readback(anchor, *, cdp_url, public_identity, remote_id, expected_description=None):
+def readback(anchor, *, cdp_url, public_identity, remote_id, expected_description=None, include_details=False):
     """Observe one currently listed work in an owned no-focus window.
 
     No pagination guesses, no direct private API calls, no editor mutation.
     A missing item on this page is inconclusive, never an absence proof.
     """
+    if type(include_details) is not bool:
+        raise PublishError('抖音详情观察选项须为布尔值')
     if (not isinstance(public_identity, str)
             or not re.fullmatch(r'[A-Za-z0-9_.-]{3,64}', public_identity) or not decimal(remote_id)):
         raise PublishError('抖音只读查询身份无效')
     with background_window(anchor, cdp_url=cdp_url) as page:
         bodies = {ACCOUNT_PATH: [], LIST_PATH: []}; errors = []
+        if include_details:
+            from douyin_post_details import DETAIL_PATH, TRANSCODE_PATH
+            bodies.update({DETAIL_PATH: [], TRANSCODE_PATH: []})
         def capture(response):
             u = urlsplit(response.url)
             if (u.scheme != 'https' or u.netloc != 'creator.douyin.com'
@@ -113,7 +119,11 @@ def readback(anchor, *, cdp_url, public_identity, remote_id, expected_descriptio
             try:
                 if response.status != 200:
                     raise ValueError()
-                bodies[u.path].append(response.json())
+                body = response.json()
+                if include_details and u.path == TRANSCODE_PATH:
+                    ids = parse_qs(u.query).get('video_id', [])
+                    body = dict(video_id=ids[0] if len(ids)==1 else None, body=body)
+                bodies[u.path].append(body)
             except Exception:
                 errors.append(u.path)
         page.on('response', capture)
@@ -143,9 +153,15 @@ def readback(anchor, *, cdp_url, public_identity, remote_id, expected_descriptio
         values = [item(b, uid, remote_id, expected_description) for b in bodies[LIST_PATH]]
         if len({digest(v) for v in values}) != 1:
             raise PublishError('抖音指定作品的独立原生响应矛盾')
-        value = values[0]; observe_visible(page, value)
-        return dict(value, observed_at=time.time(), observed_account_identity=public_identity,
+        value = values[0]; card = observe_visible(page, value)
+        result = dict(value, observed_at=time.time(), observed_account_identity=public_identity,
                     observation_scope='native_creator_list_and_visible_card',
                     content_verified=False, source_media_verified=False,
                     unverified_fields=['source_video_identity', 'horizontal_cover', 'vertical_cover',
                                        'declaration', 'collection_membership', 'activity', 'schedule'])
+        if include_details:
+            from douyin_post_details import read
+            result['details'] = read(page,card,value,public_identity,bodies,wait)
+            result['observation_scope'] = 'native_creator_list_editor_details_and_visible_fields'
+            result['unverified_fields'] = ['source_video_binding','source_cover_bindings','activity','schedule']
+        return result
