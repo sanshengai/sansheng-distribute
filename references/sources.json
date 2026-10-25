@@ -202,10 +202,15 @@
         {
           "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/Audio-pOxEHIg3.js",
           "sha256": "13bbe7421d3095e1d16737954a3fcdbf77a1289a5cdf9658bae5d95cf8e0fd05"
+        },
+        {
+          "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/Type-CIhTCM5i.js",
+          "sha256": "0b8877e7c97f76d1625ef489822b1eb31b24c6e8a666718553206f939f5ea12a"
         }
       ],
       "adoption": "Observed native route, delayed SDK binding, detached video chooser, current File and cloud receipts, separate creation/content declarations, paired plain-text topics, cover crop and upload PID contract. Independent bundled video prefill and read-only recovery validated; no frontend source vendored and no public submission capability claimed.",
-      "submission_review": "Static source review only: native feature flag selects V2 VideoPublish or legacy Audio; serialized media is passed to the shared composer, and incomplete uploads can choose automatic publication. Native completion/media_id does not establish a public post ID. No video sender enabled, no live upload/submission, no frontend source vendored."
+      "submission_review": "Runtime technical editor observed V2 feature flag enabled; separate legacy mblog_statement from video creation metadata. Creation labels map to original=0, derivative=2, repost=1 in native Type module. No native video submission response observed and no video sender enabled; media_id or completion is not a public post receipt.",
+      "readback_review": "Existing own video independently observed through native public detail and readonly author edit page in background-owned temporary windows: same author/post/media, complete text and attachment shortlink, title, cover PID, creation type, floored public duration versus fractional edit duration and visible loaded player URL from native playback_list. Numeric detail redirect is accepted only to body-bound author/mblogid. No fields changed, playback invoked, uploads or submissions; no source-file or remote-byte verification. Independently implemented parser and readonly observer only; no frontend source vendored."
     },
     {
       "platform": "x_images_upload",
