@@ -51,6 +51,16 @@ class BackgroundWindowTests(unittest.TestCase):
         with self.protocol(PROTOCOL),self.assertRaises(RuntimeError):
             with runtime.background_window(c.anchor,cdp_url='http://127.0.0.1:9333'):raise RuntimeError('navigation failed')
         self.assertTrue(c.created.closed);self.assertFalse(c.anchor.closed)
+    def test_explicit_retention_preserves_only_owned_editor_even_on_failure(self):
+        for fails in (False,True):
+            c=Context(window=True)
+            with self.protocol(PROTOCOL):
+                try:
+                    with runtime.background_window(c.anchor,cdp_url='http://127.0.0.1:9333',retain=True):
+                        if fails:raise RuntimeError('upload result unknown')
+                except RuntimeError:pass
+            self.assertFalse(c.created.closed);self.assertFalse(c.anchor.closed)
+            self.assertEqual(c.detaches,2)
 
 
 if __name__=='__main__':unittest.main()

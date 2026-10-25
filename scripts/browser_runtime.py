@@ -106,7 +106,7 @@ def connect(profile, *, writing=False):
 
 
 @contextlib.contextmanager
-def _owned_page(anchor, params):
+def _owned_page(anchor, params, *, retain=False):
     context = anchor.context
     session = context.new_cdp_session(anchor)
     owned = None
@@ -131,9 +131,9 @@ def _owned_page(anchor, params):
         yield owned
     finally:
         try:
-            if owned is not None:
+            if owned is not None and not retain:
                 owned.close()
-            elif target is not None:
+            elif owned is None and target is not None:
                 session.send('Target.closeTarget', dict(targetId=target))
         finally:
             session.detach()
@@ -147,7 +147,7 @@ def background_tab(anchor):
 
 
 @contextlib.contextmanager
-def background_window(anchor, *, cdp_url):
+def background_window(anchor, *, cdp_url, retain=False):
     """Owned active tab in a separate no-focus window for native media work.
 
     Older Chrome builds can ignore unknown protocol parameters. Require the
@@ -166,7 +166,12 @@ def background_window(anchor, *, cdp_url):
             raise ValueError('explicit focus option unavailable')
     except Exception as exc:
         raise PublishError('当前 Chrome 未证实支持不抢焦点的独立窗口；不创建窗口或降级激活') from exc
-    with _owned_page(anchor,dict(url='about:blank',newWindow=True,background=False,focus=False)) as page:
+    # Retention is explicit: an editor's attempt must persist its target_id
+    # before any mutation. Preserve that target on failure as well as success;
+    # only a verified task-owned empty editor can later be cleaned up.
+    if type(retain) is not bool:
+        raise PublishError('窗口保留选项须为布尔值')
+    with _owned_page(anchor,dict(url='about:blank',newWindow=True,background=False,focus=False),retain=retain) as page:
         yield page
 
 
