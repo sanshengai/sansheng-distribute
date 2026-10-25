@@ -25,13 +25,13 @@ def settings(profile, target):
     return identity, endpoint, browser
 
 
-def check_pack(pack):
+def check_pack(pack, *, publishing=False):
     if pack['content_type']=='video':
         from weibo_video_fields import check
         return check(pack)
-    if (pack['platform'] != 'weibo' or pack['endpoint'] != 'prefill'
+    if (pack['platform'] != 'weibo' or pack['endpoint'] != ('publish' if publishing else 'prefill')
             or pack['content_type'] not in {'text', 'images'}):
-        raise PublishError('当前微博内置模块仅承接 text/images/video:prefill；不能最终发送')
+        raise PublishError('微博普通图文仅承接 text/images:prefill/publish；视频按独立预填路线')
     if (pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']
             or (pack['document'] and pack['document']['format'] != 'text')):
         raise PublishError('微博尚未映射独立封面、字幕、长文章或平台扩展字段')
@@ -137,6 +137,39 @@ def marker_path(request_path):
     return Path(request_path).with_suffix('.browser-attempt.json')
 
 
+
+def fill(page, pack, assets, identity, saved, marker):
+    """Fill one empty native composer, persisting every exact image receipt."""
+    assert_identity(page, identity); assert_no_warning(page)
+    card, node = empty_editor(page)
+    node.fill(pack['fields']['composed_text'])
+    if node.input_value() != pack['fields']['composed_text']:
+        raise PublishError('微博实际文案与封存包不符；先读回，不重复填写')
+    for asset in assets:
+        assert_identity(page, identity); assert_no_warning(page)
+        card, node = editor(page)
+        if node.input_value() != pack['fields']['composed_text']:
+            raise PublishError('微博文案已被修改；停止后续上传')
+        assert_media(card, saved['uploaded'])
+        file = card.locator('input[type="file"]')
+        if file.count() != 1: raise PublishError('微博上传入口不是唯一')
+        with page.expect_response(upload_response, timeout=90000) as response:
+            file.set_input_files(checked_path(asset))
+        pid = picture_id(response.value)
+        if pid in [u['pid'] for u in saved['uploaded']]:
+            raise PublishError('微博重复图片 PID；无法证明图序，不继续上传')
+        saved['uploaded'].append(dict(id=asset['id'], sha256=asset['sha256'], pid=pid))
+        write_json(marker, saved)
+        # Wait on this exact remote image, never a guessed fixed sleep.
+        card.locator('img[src*="'+pid+'"]').wait_for(state='visible', timeout=15000)
+        page.wait_for_function('''pid => {
+          const imgs=Array.from(document.querySelectorAll('#homeWrap > .woo-panel-main img'))
+            .filter(n => { try {return new URL(n.getAttribute('src'),document.baseURI).pathname.split('/').pop().split('.')[0]===pid;} catch{return false;} });
+          return imgs.length===1 && imgs[0].complete && imgs[0].naturalWidth>0
+            && Array.from(document.querySelectorAll('#homeWrap > .woo-panel-main input[type=file]')).every(n=>!n.files||!n.files.length);
+        }''', arg=pid, timeout=15000)
+        assert_media(card, saved['uploaded'])
+
 def dispatch(request_path, action, profile, lock_fd):
     if read_json(request_path).get('target',{}).get('content_type')=='video':
         from weibo_video_browser import dispatch as dispatch_video
@@ -171,35 +204,7 @@ def dispatch(request_path, action, profile, lock_fd):
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as stream:
                 json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
-            assert_identity(page, identity); assert_no_warning(page)
-            card, node = empty_editor(page)
-            node.fill(pack['fields']['composed_text'])
-            if node.input_value() != pack['fields']['composed_text']:
-                raise PublishError('微博实际文案与封存包不符；先读回，不重复填写')
-            for asset in assets:
-                assert_identity(page, identity); assert_no_warning(page)
-                card, node = editor(page)
-                if node.input_value() != pack['fields']['composed_text']:
-                    raise PublishError('微博文案已被修改；停止后续上传')
-                assert_media(card, saved['uploaded'])
-                file = card.locator('input[type="file"]')
-                if file.count() != 1: raise PublishError('微博上传入口不是唯一')
-                with page.expect_response(upload_response, timeout=90000) as response:
-                    file.set_input_files(checked_path(asset))
-                pid = picture_id(response.value)
-                if pid in [u['pid'] for u in saved['uploaded']]:
-                    raise PublishError('微博重复图片 PID；无法证明图序，不继续上传')
-                saved['uploaded'].append(dict(id=asset['id'], sha256=asset['sha256'], pid=pid))
-                write_json(marker, saved)
-                # Wait on this exact remote image, never a guessed fixed sleep.
-                card.locator('img[src*="'+pid+'"]').wait_for(state='visible', timeout=15000)
-                page.wait_for_function('''pid => {
-                  const imgs=Array.from(document.querySelectorAll('#homeWrap > .woo-panel-main img'))
-                    .filter(n => { try {return new URL(n.getAttribute('src'),document.baseURI).pathname.split('/').pop().split('.')[0]===pid;} catch{return false;} });
-                  return imgs.length===1 && imgs[0].complete && imgs[0].naturalWidth>0
-                    && Array.from(document.querySelectorAll('#homeWrap > .woo-panel-main input[type=file]')).every(n=>!n.files||!n.files.length);
-                }''', arg=pid, timeout=15000)
-                assert_media(card, saved['uploaded'])
+            fill(page, pack, assets, identity, saved, marker)
             saved['state'] = 'filled'; write_json(marker, saved)
         card, node = editor(page)
         if node.input_value() != pack['fields']['composed_text']:

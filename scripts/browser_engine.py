@@ -43,7 +43,7 @@ def check_pack(pack):
         return check_douyin(pack)
     if pack['platform'] == 'weibo':
         from weibo_browser import check_pack as check_weibo
-        return check_weibo(pack)
+        return check_weibo(pack, publishing=pack['endpoint'] == 'publish')
     if (pack['platform'] != 'x' or pack['endpoint'] not in {'prefill', 'publish'}
             or pack['content_type'] not in {'text','images','video'}):
         raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text/video:publish 候选')
@@ -152,6 +152,9 @@ def dispatch(request_path, action, profile, lock_fd):
     if candidate.get('platform') == 'x' and candidate.get('endpoint') == 'publish':
         from x_publish_browser import dispatch as dispatch_x_publish
         return dispatch_x_publish(request_path, action, profile, lock_fd)
+    if candidate.get('platform') == 'weibo' and candidate.get('endpoint') == 'publish':
+        from weibo_publish_browser import dispatch as dispatch_weibo_publish
+        return dispatch_weibo_publish(request_path, action, profile, lock_fd)
     if candidate.get('platform')=='weibo' and candidate.get('content_type')=='video':
         from weibo_video_browser import dispatch as dispatch_weibo_video
         return dispatch_weibo_video(request_path,action,profile,lock_fd)
