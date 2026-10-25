@@ -34,7 +34,7 @@ def main(argv=None):
     parser.add_argument('--wechat-env-file')
     parser.add_argument('--wechat-appid-sha256', help='已确认公众号 AppID 的 SHA-256，不是 AppSecret')
     parser.add_argument('--browser-profile', help='社交模块使用的专用浏览器用户目录；不创建、不登录')
-    parser.add_argument('--browser-engine', action='append', choices=['x', 'weibo'], default=[], help='显式选内置引擎；X 文本或微博图文预填，保持未启用')
+    parser.add_argument('--browser-engine', action='append', choices=['x', 'weibo', 'douyin'], default=[], help='显式选内置预填引擎，保持未启用；能力范围见各平台说明')
     parser.add_argument('--browser-cdp-url', help='实际专用 Chrome 的本机 CDP 端点；不启动浏览器')
     parser.add_argument('--bilibili-cli', action='store_true', help='初始化 B站时选用包内受控 CLI 适配器，保持未启用')
     parser.add_argument('--bilibili-tool-dir', help='固定版 B站工具私有目录；已有目录只核对，不覆盖')

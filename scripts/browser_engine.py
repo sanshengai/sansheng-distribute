@@ -21,11 +21,14 @@ from publish_core import PublishError, digest, read_json, write_json
 
 
 def settings(profile, target):
+    if target['platform'] == 'douyin':
+        from douyin_browser import settings as douyin_settings
+        return douyin_settings(profile, target)
     if target['platform'] == 'weibo':
         from weibo_browser import settings as weibo_settings
         return weibo_settings(profile, target)
     if target['platform'] != 'x':
-        raise PublishError('当前内置浏览器引擎只实现 X 文本与微博图文预填；其他平台使用现役接力')
+        raise PublishError('当前内置浏览器引擎仅含 X 文本、微博图文与抖音视频预填；其他平台使用现役接力')
     account = profile.get('accounts', {}).get(target['account'], {})
     identity = account.get('public_identities', {}).get('x')
     if 'x' not in account.get('platforms', []) or not isinstance(identity, str) or not re.fullmatch(r'@[A-Za-z0-9_]{1,15}', identity):
@@ -35,6 +38,9 @@ def settings(profile, target):
 
 
 def check_pack(pack):
+    if pack['platform'] == 'douyin':
+        from douyin_browser import check_pack as check_douyin
+        return check_douyin(pack)
     if pack['platform'] == 'weibo':
         from weibo_browser import check_pack as check_weibo
         return check_weibo(pack)
@@ -130,6 +136,9 @@ def marker_path(request_path):
 
 
 def dispatch(request_path, action, profile, lock_fd):
+    if read_json(request_path).get('target', {}).get('platform') == 'douyin':
+        from douyin_browser import dispatch as dispatch_douyin
+        return dispatch_douyin(request_path, action, profile, lock_fd)
     if read_json(request_path).get('target', {}).get('platform') == 'weibo':
         from weibo_browser import dispatch as dispatch_weibo
         return dispatch_weibo(request_path, action, profile, lock_fd)

@@ -156,6 +156,19 @@ class EnvironmentTests(unittest.TestCase):
             env.initialize(absent,platforms=['x'],browser_engines=['weibo'])
         self.assertFalse(absent.exists())
 
+    def test_douyin_bundled_initialization_is_explicit_and_inactive(self):
+        path=self.home/'douyin/profile.json'
+        env.initialize(path,platforms=['douyin'],public_identities={'douyin':'fixture_123'},
+            browser_profile=self.home/'chrome',browser_engines=['douyin'],
+            browser_cdp_url='http://127.0.0.1:9333')
+        value=env.load_profile(path);adapter=value['adapters']['douyin']
+        self.assertEqual(adapter['enabled_capabilities'],[]);self.assertFalse(adapter['enabled'])
+        self.assertIn(str(ROOT/'scripts/browser_engine.py'),adapter['execute'])
+        self.assertEqual(set(value['adapters']),{'douyin'})
+        self.assertFalse((self.home/'chrome').exists())
+        with patch('runtime.inspect',return_value={'ok':True}), patch.object(env.shutil,'which',return_value='/available'):
+            self.assertTrue(env.doctor(self.paths(profile=path),environ={})['ok'])
+
     def test_prepare_tools_uses_only_selected_cli_and_never_logs_in(self):
         spec = importlib.util.spec_from_file_location('distribute_setup_tools', ROOT/'setup.py')
         setup = importlib.util.module_from_spec(spec); spec.loader.exec_module(setup)
