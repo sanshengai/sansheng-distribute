@@ -120,6 +120,46 @@ class EnvironmentTests(unittest.TestCase):
             env.initialize(path)
         self.assertEqual(before, path.read_bytes())
 
+    def test_bilibili_cli_initialization_is_inactive_and_has_no_browser_dependency(self):
+        path = self.home/'private/profile.json'
+        env.initialize(path, platforms=['bilibili'], public_identities={'bilibili':'42'},
+            bilibili_cli={'directory':'tools/biliup', 'credentials':'auth.json', 'tid':229})
+        value = env.load_profile(path)
+        adapter = value['adapters']['bilibili']
+        self.assertFalse(adapter['enabled']); self.assertEqual(adapter['enabled_capabilities'], [])
+        self.assertIn(str(ROOT/'scripts/bilibili_adapter.py'), adapter['execute'])
+        self.assertEqual(adapter['cli']['directory'], str(path.parent/'tools/biliup'))
+        self.assertFalse((path.parent/'tools').exists())
+        self.assertFalse((path.parent/'auth.json').exists())
+        with patch('biliup_bridge.probe', return_value={}), patch('bilibili_adapter.credential_header', return_value='fixture'), \
+                patch.object(env.shutil, 'which', return_value='/available'):
+            self.assertTrue(env.doctor(self.paths(profile=path), environ={})['ok'])
+        for platforms, cli in ((['x'], adapter['cli']), (['bilibili'], dict(adapter['cli'],tid=True)),
+                               (['bilibili'], dict(adapter['cli'],tid=0)), (['bilibili'], {})):
+            bad = self.home/'bad.json'
+            with self.assertRaises(env.EnvironmentError): env.initialize(bad, platforms=platforms, bilibili_cli=cli)
+            self.assertFalse(bad.exists())
+
+    def test_prepare_tools_uses_only_selected_cli_and_never_logs_in(self):
+        spec = importlib.util.spec_from_file_location('distribute_setup_tools', ROOT/'setup.py')
+        setup = importlib.util.module_from_spec(spec); spec.loader.exec_module(setup)
+        path = self.home/'private/profile.json'
+        env.initialize(path, platforms=['bilibili'], public_identities={'bilibili':'42'},
+            bilibili_cli={'directory':'tools/biliup', 'credentials':'auth.json', 'tid':229})
+        argv = ['--prepare-tools','--profile',str(path)]
+        with patch('biliup_bridge.install', return_value={'version':'1.3.4'}) as install, \
+                patch('biliup_bridge.login', side_effect=AssertionError('no login')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.main(argv), 0)
+        install.assert_called_once_with(path.parent/'tools/biliup')
+        (path.parent/'tools/biliup').mkdir(parents=True)
+        with patch('biliup_bridge.install', side_effect=AssertionError('no overwrite')), \
+                patch('biliup_bridge.probe', return_value={'version':'1.3.4'}) as probe, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.main(argv), 0)
+        probe.assert_called_once()
+        empty = self.write(self.home/'empty.json', {'configured_modules':[], 'accounts':{}, 'adapters':{}})
+        with patch('biliup_bridge.install', side_effect=AssertionError('unselected')), \
+                patch('biliup_bridge.probe', side_effect=AssertionError('unselected')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.main(['--prepare-tools','--profile',str(empty)]), 0)
     def test_selected_wechat_checks_missing_dependencies_without_secret_output(self):
         profile = self.home / 'selected/profile.json'
         with patch.object(env, 'discover_write_scripts', return_value=None):

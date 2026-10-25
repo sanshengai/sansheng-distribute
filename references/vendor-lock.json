@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "repository": "https://github.com/sanshengai/sansheng-write",
+      "commit": "18e2dd08f37e3dc0c1a8cb08d16ef73b6a4823e6",
+      "license": "MIT",
+      "files": [
+        {
+          "upstream_path": "scripts/wechat_api.py",
+          "local_path": "scripts/wechat_api.py",
+          "upstream_sha256": "e2d899e5e9726c3569cbd742ca660779d2e93a33c71b2d31ab76b950f981bfec",
+          "modifications": [
+            "使用分发专属 API、缓存和出口环境变量，兼容原 Write 变量",
+            "token 缓存原子写入并使用私有权限；网络和 API 错误脱敏",
+            "保留官方 API 行为与明确过期 token 重试，不在网络未知时重复建稿"
+          ],
+          "local_sha256": "3b6eea22d3a6418f0917503e839f9dc06bb3c2a2cef537c246b3272e838a7a63"
+        },
+        {
+          "upstream_path": "scripts/wechat_tunnel.py",
+          "local_path": "scripts/wechat_tunnel.py",
+          "upstream_sha256": "627d26847461306392eae5814b02dc52e5608164c2523d96bb1d4075d78951d6",
+          "modifications": [
+            "使用分发专属出口配置并兼容原 Write 路径和变量",
+            "always/off 作为模式处理，SSH 严格核验主机",
+            "完整读取 SOCKS 分片响应；明确 EOF，超时退出后清理自有进程"
+          ],
+          "local_sha256": "a6c876683005d97f14e779dadeb18697e060cce3fff8bc660f983d6a913433c7"
+        }
+      ],
+      "copyright_notice_file": "LICENSE"
+    }
+  ]
+}

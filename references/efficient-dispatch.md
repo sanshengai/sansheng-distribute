@@ -5,7 +5,7 @@
 | 平台 | 本轮采用 | 执行边界 |
 |---|---|---|
 | X | 免费浏览器流程 | 不为本流程开通付费 API；复用现有可选宝玉预填桥或宿主浏览器工具 |
-| B 站 | 浏览器保持可用；biliup CLI 已完成单次真实受理试验 | 已实测上传、封面、文案和 AI 声明；逐稿保留核心授权、锁与独立读回，尚未自动注册通用上传适配器 |
+| B 站 | 浏览器保持可用；包内受控 biliup 适配器保持未启用 | 旧单次试验实测上传、封面、文案和 AI 声明；新通用适配器已完成离线合同与真实只读验证，尚未真实上传验收 |
 | 抖音 | 创作者网页 | 政务代投稿接口不视为普通个人接口；不伪造机构资质 |
 | 微信视频号 | 视频号助手网页 | 与公众号、腾讯视频分别处理；读取真实合集、话题和声明字段 |
 | 小红书 | 解限后只预填，作者最终点击 | 受限账号仅交付本地发布包，不启动自动化；不用人手点一次推断可以避免风控 |
@@ -30,7 +30,7 @@
 
 按需读取本节，使用当前宿主允许的浏览器通道。宿主不允许外部 CDP 脚本时，不运行本助手，继续原有宿主浏览器工具。不要因本助手存在就认为所有 Agent 都可直接执行 Playwright。
 
-在私有 profile 中显式设置 `browser_prefill`，默认不存在即关闭。Playwright 为可选依赖，使用本机已有环境；本助手不自动安装依赖或启动 Chrome。配置示例（定位器和身份文本必须现场核实）：
+在私有 profile 中显式设置 `browser_prefill`，默认不存在即关闭。先用 `setup.py --prepare-runtime` 准备本包固定依赖；助手不自行安装或启动 Chrome。配置示例（定位器和身份文本必须现场核实）：
 
 ```json
 {
@@ -60,13 +60,15 @@
 python3 scripts/browser_prefill.py /absolute/path/request.json --profile /absolute/path/profile.private.json
 ```
 
+该入口会自动使用 `setup.py --prepare-runtime` 准备的固定私有环境，系统 Python 不必安装 Playwright。自定义位置须保存在同一 profile 的 `runtime_dir`，执行时不猜其他 Skill 的环境。
+
 前置条件：当前 `execute` 租约活跃；manifest 与发布包摘要一致；实际 Chrome 命令行的 `--user-data-dir` 与绑定 profile 相同；当前编辑页来源/路径和真实账号身份一致。Chrome 未开 `--enable-automation` 时，由该 CDP 连接返回的实际浏览器 PID 只读查询进程参数；仍无法核对时停止，由原宿主工具接管，不自动重启浏览器。每次写入前复核租约和身份，上传前再验素材摘要。
 
 同一请求一旦开始就写入 `.prefill-attempt.json`，包含步骤耗时和状态，不记正文或 Cookie。再次运行拒绝重传；Agent 先检查同一页面并按核心恢复流程处理。`steps_completed` 只表示这些步骤执行完，不表示上传已处理完成、预填已验收或已发布。切勿据此手工把账本改成完成。
 
 ## B 站 CLI 安装、认证及验证
 
-可选工具固定到 Apple Silicon macOS 的 biliup-cli 1.3.4，先验证上游压缩包 SHA-256，提取唯一可执行文件，再保存二进制摘要。每次运行前验证版本和摘要；已有目录/凭证拒绝覆盖。该模块不作为正式发布适配器自动注册。
+可选工具固定到 Apple Silicon macOS 的 biliup-cli 1.3.4，先验证上游压缩包 SHA-256，提取唯一可执行文件，再保存二进制摘要。每次运行前验证版本和摘要；已有目录/凭证拒绝覆盖。首次配置可用统一安装入口选择包内受控适配器，仍保持发布能力关闭；详见[配置指南](setup.md)。
 
 ```sh
 python3 scripts/biliup_bridge.py install --directory /private/tools/biliup-1.3.4
@@ -83,7 +85,11 @@ python3 scripts/biliup_bridge.py identity --directory /private/tools/biliup-1.3.
 python3 scripts/biliup_bridge.py plan --directory /private/tools/biliup-1.3.4 --credentials /private/auth/bilibili.json --manifest /private/manifest.json --target bili --profile /private/profile.json --tid 171
 ```
 
-`tid` 必须实查，示例不是默认推荐分区。试验计划只接受显式声明 `platform_metadata.copyright=1` 的单视频自制投稿及可选封面。可选 `platform_metadata.ai_generated` 必须为布尔值；true 时通过 `--extra-fields` 传入 `creation_statement: {"id": 1}`。字幕、合集、活动、额外正文、独立 links 等尚未覆盖时拒绝生成，保持浏览器路线。不要为通过计划检查删除真实 AI 声明。本桥仍只规划参数；真实试验应由核心运行时内的受限适配器执行，不在锁外直接照抄命令。
+`tid` 必须实查，示例不是默认推荐分区。计划只接受显式声明 `platform_metadata.copyright=1` 的单视频自制投稿及可选封面。受控执行器还要求显式布尔 `platform_metadata.ai_generated`；true 时通过 `--extra-fields` 传入 `creation_statement: {"id": 1}`。字幕、合集、活动、额外正文、独立 links 等尚未覆盖时拒绝生成，保持浏览器路线。不要为通过检查删除真实 AI 声明。`biliup_bridge.py plan` 仍只规划参数；真正上传必须由核心 `run` 调用 `bilibili_adapter.py`，不在锁外直接照抄命令。
+
+受控适配器在账号核对后将封存视频与封面复制到本任务私有目录，边复制边计算摘要；不符即在上传前拒绝。CLI 只读取这份快照。启动前保存尝试标记，受理响应一出现就保存 `aid/bvid`，CLI 随后异常也不丢失远端身份。后续 `resume` 只查同一稿，后台与公开读回相符才完成。外层超时终止整个执行组，避免 CLI 留在后台继续投稿；仍须先查询实际结果。
+
+配置默认外层预算2100秒，CLI默认1500秒；外层必须至少比CLI多180秒，否则在上传前拒绝。私有日志可能包含上传签名URL，不回显或提交。上传快照和尝试证据保留到稿件确认、复盘与续跑不再需要时，再按任务归属清理。
 
 启用真实 CLI 上传前，须用新的、已授权的内容完成：登录 UID 核对、实际字段等价性、AI 标识适用性、进入核心授权/锁/未知恢复、保存真实稿件 ID、独立作品页读回及失败反例。不能拿历史已发布内容重复投稿试验。
 

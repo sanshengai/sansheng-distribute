@@ -9,7 +9,7 @@
 
 Claude Code、Codex、Antigravity、Grok Build 共用中性 manifest、Python CLI 与账本；只要宿主有合规本机进程工具即可调用核心。浏览器工具名称和权限依宿主而异，见 [浏览器接力](browser-execution.md)。CLI 可执行不能证明该宿主已能上传、插媒体和读取平台结果。
 
-核心支持 macOS/Linux Python 3.10+；`fcntl` 与文件描述符继承要求 POSIX。Windows 暂未实现兼容层。公众号还依赖可用的 Write `wechat_api.py`、已绑定账号的私有凭证及实际网络权限；需要编辑器时另需专用 Chrome 与宿主浏览器能力。
+核心支持 macOS/Linux Python 3.10+；`fcntl` 与文件描述符继承要求 POSIX。Windows 暂未实现兼容层。公众号API模块随包提供，还需已绑定账号的私有凭证及实际网络权限；显式旧Write模块配置继续兼容。需要编辑器时另需专用Chrome与宿主浏览器能力。
 
 ## 首次能力试验
 

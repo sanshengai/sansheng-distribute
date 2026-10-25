@@ -4,10 +4,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
+import types
+from urllib.parse import urlsplit, unquote
 from html.parser import HTMLParser
 import re
 
@@ -107,6 +110,35 @@ def credentials(profile, account):
     return app,secret
 
 
+def validate_images(manifest, target):
+    """Every file the API may upload must be in this target's sealed assets."""
+    document = next(d for d in manifest['documents'] if d['id'] == target['document_id'])
+    root = Path(manifest['source_root'])
+    source = resolve_file(root, document['path'])
+    permitted = {resolve_file(root, a['path']):a for a in manifest['assets']
+                 if a['id'] in target.get('asset_ids', []) and a['kind'] == 'image'}
+    class Images(HTMLParser):
+        def __init__(self): super().__init__(); self.refs = []
+        def handle_starttag(self, tag, attrs):
+            if tag == 'img': self.refs.append(dict(attrs))
+    parser = Images(); parser.feed(source.read_text(encoding='utf-8'))
+    for item in parser.refs:
+        src = item.get('src') or ''
+        parsed = urlsplit(src)
+        if parsed.scheme == 'https' and parsed.hostname == 'mmbiz.qpic.cn':
+            continue
+        if src.startswith('data:image/'):
+            continue  # Bytes are already part of the sealed document, not another file.
+        ref = item.get('data-local-path') or src
+        parts = urlsplit(ref)
+        if not ref or parts.scheme or parts.netloc or parts.query or parts.fragment:
+            raise PublishError('正文图必须为已登记本地图片或微信图片地址')
+        path = (source.parent / unquote(ref)).resolve()
+        asset = permitted.get(path)
+        if asset is None or not path.is_file() or file_hash(path) != asset.get('sha256'):
+            raise PublishError('正文图未列入当前目标的封存素材或文件已变化；上传前拒绝')
+
+
 def preflight_wechat(manifest, target, profile, argv):
     """Resolve local prerequisites without token requests or uploads."""
     if target['content_type'] != 'article' or target['endpoint'] != 'draft':
@@ -120,12 +152,13 @@ def preflight_wechat(manifest, target, profile, argv):
     docs = {d['id']: d for d in manifest['documents']}
     if docs[target['document_id']]['format'] != 'html':
         raise PublishError('公众号草稿需要最终 HTML')
-    for flag in ('--write-scripts', '--profile'):
+    validate_images(manifest, target)
+    for flag in ('--profile',):
         if flag not in argv or argv.index(flag) + 1 >= len(argv):
             raise PublishError(f'公众号适配器缺少 {flag}')
-    module = Path(argv[argv.index('--write-scripts') + 1]).expanduser() / 'wechat_api.py'
+    module = api_module_path(argv)
     if not module.is_file():
-        raise PublishError('现役 Write 微信 API 模块缺失')
+        raise PublishError('微信 API 模块缺失')
     from environment import load_profile
     adapter_profile = load_profile(Path(argv[argv.index('--profile') + 1]).expanduser())
     current_account = dict(profile.get('accounts', {}).get(target['account'], {}))
@@ -206,6 +239,7 @@ def dispatch(request_path, profile, api, *, action):
 
     if action=='execute':
         validate(manifest)
+        validate_images(manifest, target)
         if not isinstance(target.get('title'), str) or not target['title'].strip():
             raise PublishError('公众号草稿必须明确非空标题 title')
         if record.get('submission_started'):
@@ -326,17 +360,43 @@ def response(req,state,remote_id,**extra):
                 state=state,remote_id=remote_id,**extra)
 
 
+def api_module_path(argv):
+    """Default to this package; an explicit legacy path never silently falls back."""
+    if '--write-scripts' in argv:
+        index = argv.index('--write-scripts')
+        if index + 1 >= len(argv) or argv[index + 1].startswith('--'):
+            raise PublishError('公众号适配器缺少 --write-scripts 路径')
+        return Path(argv[index + 1]).expanduser().resolve() / 'wechat_api.py'
+    return Path(__file__).resolve().with_name('wechat_api.py')
+
+
+def load_api(write_scripts=None):
+    if write_scripts is None:
+        import wechat_api
+        return wechat_api
+    root = Path(write_scripts).expanduser().resolve()
+    if not (root / 'wechat_api.py').is_file():
+        raise PublishError('显式指定的微信 API 模块缺失')
+    # Old profiles retain their chosen module and companion tunnel imports.
+    package_name = 'distribute_legacy_wechat_' + hashlib.sha256(str(root).encode()).hexdigest()[:16]
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(root)]
+    sys.modules[package_name] = package
+    spec = importlib.util.spec_from_file_location(package_name + '.api', root / 'wechat_api.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('action',choices=['execute','verify','inspect-media'])
     p.add_argument('--request',required=True)
     p.add_argument('--profile',required=True)
-    p.add_argument('--write-scripts',required=True,help='现役 Write scripts 路径，复用既有 API/token/白名单隧道')
+    p.add_argument('--write-scripts',help='兼容旧配置：显式复用指定模块；默认使用本包内置 API')
     args=p.parse_args()
     try:
-        root=Path(args.write_scripts).resolve()
-        if not (root/'wechat_api.py').is_file(): raise PublishError('现役微信 API 模块缺失')
-        sys.path.insert(0,str(root)); api=importlib.import_module('wechat_api')
+        api=load_api(args.write_scripts)
         from environment import load_profile
         value=dispatch(args.request,load_profile(args.profile),api,action=args.action)
         print(json.dumps(value,ensure_ascii=False)); return 0

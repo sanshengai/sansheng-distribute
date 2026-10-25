@@ -1,6 +1,6 @@
 # 安装与私有配置
 
-本体需要 macOS 或 Linux、Python 3.10+ 和 Agent 的本机命令工具。核心采用标准库；不需要 作者工作区、作者的目录结构或 Write，就能校验交接、管理任务和续跑。浏览器发布需要当前 Agent 已获准的浏览器工具；公众号 API 草稿额外复用 `sansheng-write/scripts/wechat_api.py`。
+本体需要 macOS 或 Linux、Python 3.10+ 和 Agent 的本机命令工具。核心采用标准库；不需要 作者工作区、作者的目录结构或 Write，就能校验交接、管理任务和续跑。浏览器发布需要当前 Agent 已获准的浏览器工具；公众号 API 草稿使用包内 `scripts/wechat_api.py`，不需要安装 Write。
 
 所有命令中的 `<skill-root>` 是当前 `SKILL.md` 所在真实目录。不要把用户工程当前目录当成 Skill 根。
 
@@ -26,7 +26,6 @@ python3 '<skill-root>/setup.py' --init
 python3 '<skill-root>/setup.py' --init \
   --profile '/private/directory/profile.json' \
   --platform wechat --account editorial \
-  --write-scripts '/installed/sansheng-write/scripts' \
   --wechat-env-file '/private/directory/wechat.env' \
   --wechat-appid-sha256 '<confirmed-appid-sha256>'
 ```
@@ -45,7 +44,48 @@ python3 '<skill-root>/setup.py' --init --platform x \
 
 公开身份存为 `accounts.<alias>.public_identities.<platform>`，浏览器目录存为 `browser_profile`。引导不会创建浏览器目录、登录或读取 cookie。缺失这些项时仍可建立待配置文件，但 `configuration_ready=false`，诊断返回未就绪；补齐同一文件后再跑 `--doctor`。本地路径和公开身份齐备也不证明实际页面已登录或账号匹配，执行时仍要重新观察。
 
-缺少微信依赖时，引导先发现本体相邻的 `sansheng-write` 或四家 Agent 的既有 Skill 入口；显式 `--write-scripts` 指向缺失模块时直接拒绝，不悄悄换成另一个目录。未安装则按 `sansheng-write` 的公开安装说明安装后，显式填写实际 `scripts` 路径。未选公众号时完全不检查 Write。
+## 选用 B站受控 CLI
+
+Apple Silicon macOS 可在首次初始化选择包内适配器；不需要浏览器目录或其他发布 Skill：
+
+```sh
+python3 '<skill-root>/setup.py' --init --platform bilibili --bilibili-cli \
+  --profile '/private/directory/profile.json' --public-identity 'bilibili=123456' \
+  --bilibili-tid 171 \
+  --bilibili-tool-dir '/private/tools/biliup-1.3.4' \
+  --bilibili-credentials '/private/auth/bilibili.json'
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --prepare-tools
+```
+
+UID与分区均须实查，示例不是推荐取值。工具和凭证路径可省略，分别使用本包私有数据与配置目录。初始化只写配置，不安装、登录或发布；缺少工具/登录时诊断未就绪是预期结果。`--prepare-tools` 只为已选CLI路线安装固定工具，有效既有工具只核对，不覆盖。未选路线时不下载。
+
+随后由作者扫码登录一次：
+
+```sh
+python3 '<skill-root>/scripts/biliup_bridge.py' login \
+  --directory '/private/tools/biliup-1.3.4' --credentials '/private/auth/bilibili.json'
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --doctor
+```
+
+已有登录文件不覆盖。执行时重新核对实际UID；`ffprobe`须在本机可调用，用于读回时长。初始化保持 `enabled_capabilities=[]`，新适配器只有离线合同和真实只读证据，首次上传仍按精确验收授权执行。当前只支持自制单视频、可选封面、标题/简介/标签与AI声明；合集、活动、字幕等不静默省略，见[执行边界](efficient-dispatch.md)。浏览器路线原有配置不自动改写。
+
+新建公众号配置默认使用包内模块，不扫描相邻 Write 或其他 Agent 的入口。旧配置显式 `--write-scripts` 继续使用原模块；指定路径缺失时拒绝，不悄悄改用内置模块。未选公众号不检查其凭证或 API 模块。
+
+## 可选浏览器运行环境
+
+选择 X、微博、抖音、视频号或小红书后，可用同一个入口准备固定版浏览器依赖：
+
+```sh
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --prepare-runtime
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --runtime-status
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --browser-status
+```
+
+依赖装到私有独立环境；不修改系统 Python，不下载另一份 Chrome，不安装其他发布 Skill。只选核心、公众号或 B站时不安装这组依赖。版本与下载哈希见 `browser-requirements.lock`；已有有效环境复用，已有异常环境保留并拒绝覆盖。需要不同位置时，新安装使用 `--init --runtime-dir`，已有配置先在同一私有 profile 中设置 `runtime_dir`，再准备依赖。安装命令不悄悄改写配置；与 profile 不一致的安装位置会在创建环境前拒绝。
+
+专用 Chrome 已运行后，在 profile 中配置 `browser_runtime.cdp_url`，例如 `http://127.0.0.1:9333`，并保留与该实例一致的绝对路径 `browser_profile`。旧 `browser_prefill.cdp_url` 兼容。端口从实际专用实例核对，不从陈旧端口文件或日常浏览器猜测。
+
+`--browser-status` 仅连接本机明确端点，核对浏览器实际启动参数与 profile，并统计各平台页面数量；不导航、不登录、不上传。返回成功仅证明连接与实例正确，不证明账号登录或发布权限。多个平台共用 profile 时写入串行；只读检查不关闭或重启 Chrome。预填配方继续遵守当前 Agent 的浏览器工具政策。
 
 ## 路径与原账本
 
@@ -67,3 +107,11 @@ profile 内的相对路径以 profile 所在目录解析，包括 `state_dir`、
 ## 四家 Agent
 
 使用各 Agent 官方 Skill 安装方式，将同一个本体注册到其 Skill 入口；重新启动会话后验证能发现 `sansheng-distribute`。这里不代替各家安装器，也不擅自创建或重写软链接。本机已有受管入口时继续使用共享同步流程，不能因为安装说明又复制一份同名本体。能发现 Skill 不代表已完成该 Agent 的浏览器执行验收。
+
+## 公众号内置模块与白名单出口
+
+新模块读取 `SANSHENG_DISTRIBUTE_CACHE_DIR`、`SANSHENG_DISTRIBUTE_WECHAT_API_BASE`、`SANSHENG_DISTRIBUTE_WECHAT_TUNNEL` 和 `SANSHENG_DISTRIBUTE_WECHAT_TUNNEL_KEY`；原有同名 `SANSHENG_WRITE_*` 变量继续作为后备。默认 token 缓存在私有 `~/.cache/sansheng-distribute/`，不写进 Skill。
+
+本机出口不在公众号白名单时，可使用明确配置的固定白名单出口，配置在 `~/.config/sansheng-distribute/wechat-tunnel.json`；旧 `~/.config/sansheng-write/wechat-tunnel.json` 兼容。格式为 `{"host":"your-host","user":"publisher","port":22,"key":"/private/key"}`，不含公众号秘密。`always` 读取此配置强制使用出口，`off` 只直连；首次 SSH 主机信任须由用户正常建立。没有配置时明确报错，不要求安装 Write。
+
+包内模块已通过隔离单包、本地 HTTP 建稿与独立读回验证；这项测试不等于新增真实账号的音视频播放器插入或正式发表验收。

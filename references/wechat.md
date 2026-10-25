@@ -2,7 +2,7 @@
 
 优先验证公开 API；不支持时 API 建稿后由 Agent 操作编辑器。2026-10-24 已在一个真实账号完成测试草稿的混合链验收；不外推为所有账号或公开发布已通过。
 
-当前 `scripts/wechat_adapter.py` 实现 API 草稿建立、独立读回和基于实际观察回执的原生媒体核对；公众号模块可选依赖 Write 的 `wechat_api.py`。凭证以 AppID 指纹绑定明确账号。带媒体槽的稿件先返回 `pending / native_media_insertion_required`，由 `advance` 交给 Agent 在编辑器补齐，再通过 API 核对位置与内容。发表与群发适配尚未完成。
+当前 `scripts/wechat_adapter.py` 实现 API 草稿建立、独立读回和基于实际观察回执的原生媒体核对；官方 API 与白名单出口模块已内置；旧配置可继续显式指定 Write 模块。凭证以 AppID 指纹绑定明确账号。带媒体槽的稿件先返回 `pending / native_media_insertion_required`，由 `advance` 交给 Agent 在编辑器补齐，再通过 API 核对位置与内容。发表与群发适配尚未完成。
 
 API 列表成功但为空，只能证明该请求连通；不能据此推断没有草稿、已获得播放器样本或具有发表权限。
 

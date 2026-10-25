@@ -125,16 +125,16 @@ python3 setup.py --doctor
 
 | 模块 | 用途与所需条件 | 不启用时 | 新配置示例 |
 |---|---|---|---|
-| 公众号 | API 草稿；需账号凭证和 [sansheng-write](https://github.com/sanshengai/sansheng-write) 的 `wechat_api.py`；媒体补齐需浏览器 | 不创建公众号草稿 | `python3 setup.py --init --platform wechat` |
+| 公众号 | API 草稿；需账号凭证，API 模块已内置；媒体补齐需浏览器 | 不创建公众号草稿 | `python3 setup.py --init --platform wechat` |
 | X | 当前 Agent 操作已登录浏览器 | 不操作 X | `python3 setup.py --init --platform x` |
 | 微博 | 当前 Agent 操作已登录浏览器 | 不操作微博 | `python3 setup.py --init --platform weibo` |
 | 抖音 | 视频素材、创作后台和 Agent 浏览器工具 | 不上传抖音视频 | `python3 setup.py --init --platform douyin` |
-| B 站 | 视频素材、创作中心和 Agent 浏览器工具 | 不上传 B 站视频 | `python3 setup.py --init --platform bilibili` |
+| B 站 | 视频素材、创作中心和 Agent 浏览器工具；可选固定CLI | 不上传 B 站视频 | `python3 setup.py --init --platform bilibili` |
 | 小红书 | 图文/视频、浏览器；作者最终点击 | 不操作小红书 | `python3 setup.py --init --platform xiaohongshu` |
 | 微信视频号 | 视频素材、视频号助手和 Agent 浏览器工具 | 不上传视频号视频 | `python3 setup.py --init --platform wechat_channels` |
 | 腾讯视频 | 视频素材、独立创作后台和 Agent 浏览器工具 | 不上传腾讯视频 | `python3 setup.py --init --platform tencent_video` |
 
-上表命令用于首次初始化，已有配置会拒绝覆盖。已初始化的用户按[配置说明](references/setup.md)显式编辑所选配置；不要为了添加平台另建一份空账本。公众号缺少 Write 模块时会给出安装路径要求，核心不会因此要求所有用户安装 Write。
+上表命令用于首次初始化，已有配置会拒绝覆盖。已初始化的用户按[配置说明](references/setup.md)显式编辑所选配置；不要为了添加平台另建一份空账本。公众号使用本包内置 API；旧配置显式指定的 `--write-scripts` 路径继续兼容，新安装不扫描或要求另装 Write。
 
 新配置使用 `SANSHENG_DISTRIBUTE_PROFILE` / `SANSHENG_DISTRIBUTE_STATE`，兼容旧变量和原账本。秘密仅放环境变量或私有 env 文件，样例见 [.env.example](.env.example)；程序不会自动载入仓根 `.env`。新旧账本同时存在时必须显式选择，不能自动迁移。详见[安装与私有配置](references/setup.md)。
 
@@ -162,7 +162,7 @@ python3 -m unittest discover -s tests
 
 **Experimental.** A real WeChat Official Account draft has passed API creation, browser insertion of audio/video, save/reopen and official API readback. Public publication, mass messaging and an entirely API-based media workflow have not been validated. Some video platforms have single-account acceptance evidence; see [platform evidence](references/platforms.md). The new optional prefill helper and CLI route require separate acceptance. This is not a promise of universal one-click publishing.
 
-The core requires **macOS/Linux and Python 3.10+**, uses the standard library and does not require Write. WeChat API drafts optionally use the separately installed [sansheng-write](https://github.com/sanshengai/sansheng-write) module. Browser actions rely on the current agent's authorized browser tools. Xiaohongshu stops at a draft or prefilled page; the author makes the final click.
+The core requires **macOS/Linux and Python 3.10+**, uses the standard library and does not require Write. WeChat API drafts use the bundled module; an explicitly configured legacy Write module remains supported. Browser actions rely on the current agent's authorized browser tools. Xiaohongshu stops at a draft or prefilled page; the author makes the final click.
 
 ```sh
 git clone https://github.com/sanshengai/sansheng-distribute.git
@@ -206,9 +206,9 @@ I'm **sansheng**, a creator building content and tools with AI. These skills gro
 
 - [宝玉 / baoyu-skills](https://github.com/JimLiu/baoyu-skills)：借鉴公众号、X 与微博的发布流程；审阅版本采用 MIT。未捆绑上游执行代码。
 - [dreammis / social-auto-upload](https://github.com/dreammis/social-auto-upload)：多平台视频上传的调研来源；审阅仓库采用 MIT，总 Skill 标注 MIT-0。本项目不捆绑或默认安装该工具，也不把其微信视频号适配当作腾讯视频支持。
-- [sansheng-write](https://github.com/sanshengai/sansheng-write)（MIT）：公众号模块的可选运行依赖，由用户另行安装；文章创作和排版仍由生产端负责。
+- [sansheng-write](https://github.com/sanshengai/sansheng-write)（MIT）：内置公众号 API 与白名单出口模块的来源，保留 MIT 许可与文件来源锁；文章创作和排版仍由生产端负责。
 
-Reviewed upstream revisions and adoption scope are recorded in [sources.json](references/sources.json). Upstream executable code is not vendored. The core uses Python's standard library; the optional WeChat dependency is installed separately.
+Reviewed upstream revisions and adoption scope are recorded in [sources.json](references/sources.json). Bundled WeChat modules retain their MIT attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Other reviewed publisher projects are not bundled as separate Skills or services. Optional browser dependencies and the pinned Bilibili tool are prepared through this package's setup entrypoint.
 
 ## License
 

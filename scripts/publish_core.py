@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -539,6 +540,9 @@ def preflight(manifest, ident, profile):
         if any(Path(a).name == 'wechat_adapter.py' for a in argv):
             from wechat_adapter import preflight_wechat
             preflight_wechat(manifest, target, profile, argv)
+        if any(Path(a).name == 'bilibili_adapter.py' for a in argv):
+            from bilibili_adapter import preflight_bilibili
+            preflight_bilibili(manifest, target, profile, argv)
     return dict(report, target_id=ident, endpoint=target['endpoint'], local_only=True)
 
 
@@ -549,8 +553,18 @@ def invoke(config, action, request_path, *, lock_fd):
         # The executing child retains the same flock after a parent SIGKILL.
         # Adapters must keep foreground ownership and forward this fd if spawning.
         env = dict(os.environ, SANDY_PUBLISH_LOCK_FD=str(lock_fd))
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=config.get("timeout_seconds", 300),
-                                check=False, pass_fds=(lock_fd,), env=env)
+        # A bounded executor owns its own process group. On timeout, stopping only
+        # its Python parent would leave a CLI uploading with the inherited lock.
+        with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              pass_fds=(lock_fd,), env=env, start_new_session=True) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=config.get('timeout_seconds', 300))
+            except subprocess.TimeoutExpired:
+                try: os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                process.communicate(timeout=5)
+                raise
+            result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PublishError(f"适配器 {action} 未完成（{type(exc).__name__}）；必须先查询，不重复发送") from exc
     if result.returncode != 0:

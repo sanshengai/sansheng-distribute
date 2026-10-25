@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
+import os
 import subprocess
 import sys
 import time
@@ -21,31 +21,7 @@ from platform_pack import build_pack
 from publish_core import PublishError, digest, file_hash, read_json, write_json
 from social_adapter import _account, work_path
 
-ORIGINS = {
-    'x': {'https://x.com'},
-    'douyin': {'https://creator.douyin.com'},
-    'bilibili': {'https://member.bilibili.com'},
-    'wechat_channels': {'https://channels.weixin.qq.com'},
-    'xiaohongshu': {'https://creator.xiaohongshu.com'},
-}
-
-
-def browser_arguments(session):
-    try:
-        return session.send('Browser.getBrowserCommandLine')['arguments']
-    except Exception:
-        # The existing user profile may intentionally omit enable-automation.
-        # Resolve the connected browser's own PID, not an unrelated Chrome.
-        processes = session.send('SystemInfo.getProcessInfo')['processInfo']
-        ids = [p['id'] for p in processes if p['type'] == 'browser']
-        if len(ids) != 1 or type(ids[0]) is not int or ids[0] <= 0:
-            raise PublishError('无法确定实际连接的浏览器进程')
-        process = subprocess.run(['ps', '-ww', '-p', str(ids[0]), '-o', 'command='],
-                                 capture_output=True, text=True, timeout=5)
-        if process.returncode:
-            raise PublishError('无法只读核对实际浏览器进程')
-        values = re.findall(r'(?:^|\s)--user-data-dir=(.*?)(?=\s--[a-zA-Z]|$)', process.stdout.strip())
-        return ['--user-data-dir=' + v for v in values]
+from browser_runtime import ORIGINS, browser_arguments, browser_config, connect
 
 
 def bind(request_path, profile):
@@ -142,32 +118,13 @@ def execute(request_path, profile):
     cfg = profile.get('browser_prefill', {})
     recipe = cfg.get('recipes', {}).get(pack['platform'], {})
     steps = make_steps(pack, recipe)
-    endpoint = cfg.get('cdp_url', '')
-    parts = urlsplit(endpoint)
-    if (parts.scheme != 'http' or parts.hostname not in {'127.0.0.1', 'localhost'}
-            or not parts.port or parts.path not in {'', '/'} or parts.query or parts.fragment
-            or parts.username or parts.password):
-        raise PublishError('仅连接显式配置的本机专用 CDP 端点')
+    browser_config(profile)
     marker = Path(request_path).with_suffix('.prefill-attempt.json')
     # A receipt is deliberately irreversible by this helper. Even a timeout may
     # follow an accepted upload. Agent must inspect the same page before retry.
     if marker.exists():
         raise PublishError('已尝试预填；先检查原页面，禁止自动重复上传')
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise PublishError('可选依赖未安装：使用现有 Playwright 环境或由 Agent 原有浏览器工具执行') from exc
-    with sync_playwright() as pw:
-        connection = pw.chromium.connect_over_cdp(endpoint, timeout=15000)
-        # Never restart Chrome just to obtain its profile binding.
-        session = connection.new_browser_cdp_session()
-        try:
-            arguments = browser_arguments(session)
-        except Exception as exc:
-            raise PublishError('不能核对实际 Chrome profile；保留当前实例，由 Agent 原有工具接管') from exc
-        profiles = [a.partition('=')[2] for a in arguments if a.startswith('--user-data-dir=')]
-        if len(profiles) != 1 or Path(profiles[0]).resolve() != Path(browser).resolve():
-            raise PublishError('实际连接的 Chrome 不是约定的专用 profile')
+    with connect(profile, writing=True) as connection:
         candidates = []
         for context in connection.contexts:
             for page in context.pages:
@@ -206,7 +163,15 @@ def main():
     parser.add_argument('request'); parser.add_argument('--profile', required=True)
     args = parser.parse_args()
     try:
-        print(json.dumps({'ok': True, 'result': execute(args.request, load_profile(args.profile))}, ensure_ascii=False))
+        profile = load_profile(args.profile)
+        from runtime import directory, worker_command
+        if Path(sys.prefix).resolve() != directory(profile):
+            command = worker_command(profile, 'browser_prefill', [args.request, '--profile', args.profile])
+            inherited = ()
+            if 'SANDY_PUBLISH_LOCK_FD' in os.environ:
+                fd = int(os.environ['SANDY_PUBLISH_LOCK_FD']); os.fstat(fd); inherited = (fd,)
+            return subprocess.run(command, pass_fds=inherited, check=False).returncode
+        print(json.dumps({'ok': True, 'result': execute(args.request, profile)}, ensure_ascii=False))
     except Exception as exc:
         # Browser exceptions may contain article text or file paths; don't echo.
         message = str(exc) if isinstance(exc, PublishError) else f'预填停止：{type(exc).__name__}；检查原编辑页'

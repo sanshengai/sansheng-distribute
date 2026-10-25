@@ -168,6 +168,25 @@ print(json.dumps({'manifest_digest':r['manifest_digest'],'target_id':t['id'],'pl
         with self.assertRaisesRegex(PublishError, 'exit=5'): run(path, 'wechat', self.profile(script), self.store)
         with self.assertRaisesRegex(PublishError, '不重复提交'): run(path, 'wechat', self.profile(script), self.store)
 
+    def test_adapter_timeout_stops_grandchild_even_if_it_ignores_term(self):
+        from publish_core import invoke
+        child = self.root/'late_child.py'
+        child.write_text('import signal,time\nfrom pathlib import Path\n'
+            'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
+            'Path(__file__).with_suffix(".started").touch()\n'
+            'time.sleep(1)\nPath(__file__).with_suffix(".late").touch()\n')
+        parent = self.root/'executor.py'
+        parent.write_text('import subprocess,sys,time\nfrom pathlib import Path\n'
+            'subprocess.Popen([sys.executable,str(Path(__file__).with_name("late_child.py"))])\n'
+            'time.sleep(20)\n')
+        with (self.root/'held.lock').open('w') as lock:
+            with self.assertRaisesRegex(PublishError,'必须先查询'):
+                invoke({'execute':[sys.executable,str(parent)], 'timeout_seconds':.4},'execute',
+                    self.root/'request.json',lock_fd=lock.fileno())
+        self.assertTrue(child.with_suffix('.started').is_file())
+        time.sleep(1)
+        self.assertFalse(child.with_suffix('.late').exists())
+
     def test_other_target_and_producer_do_not_resend(self):
         m = copy.deepcopy(self.manifest)
         m['producer'] = 'another-producer'

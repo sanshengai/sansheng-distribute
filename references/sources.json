@@ -37,14 +37,16 @@
     {
       "repository": "https://github.com/biliup/biliup",
       "release": "v1.3.4",
+      "license": "MIT",
       "asset": "biliupR-v1.3.4-aarch64-macos.tar.xz",
       "sha256": "1bfdb13a092600907e6111c0ed08c30af4abe5c8ed0b041e6d98b94efe376d46",
       "scope": [
         "optional local CLI installation",
         "login",
-        "upload argument planning"
+        "upload argument planning",
+        "controlled adapter acceptance log and independent readback"
       ],
-      "adoption": "optional private binary download; no binary vendored; real CLI publication not enabled"
+      "adoption": "optional private binary download; no binary or source vendored; in-package controlled adapter is disabled pending its own real-upload acceptance"
     }
   ]
 }

@@ -130,7 +130,7 @@ class BrowserStepsTests(unittest.TestCase):
         session.send.side_effect = [RuntimeError('no automation flag'),
                                    {'processInfo': [{'type': 'browser', 'id': 123}]}]
         command = '/Applications/Chrome --user-data-dir=/private/Dedicated Browser --remote-debugging-port=9333'
-        with patch('browser_prefill.subprocess.run', return_value=subprocess.CompletedProcess([], 0, command, '')) as ps:
+        with patch('browser_runtime.subprocess.run', return_value=subprocess.CompletedProcess([], 0, command, '')) as ps:
             self.assertEqual(browser_arguments(session), ['--user-data-dir=/private/Dedicated Browser'])
         self.assertEqual(ps.call_args.args[0], ['ps', '-ww', '-p', '123', '-o', 'command='])
 
