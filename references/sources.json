@@ -10,7 +10,7 @@
         "baoyu-post-to-x",
         "baoyu-post-to-weibo"
       ],
-      "adoption": "workflow study; no upstream executable vendored; Weibo upstream prefill is not final publication"
+      "adoption": "workflow study; original in-package X text-prefill implementation, no upstream executable vendored; media/publication remain unaccepted; Weibo upstream prefill is not final publication"
     },
     {
       "repository": "https://github.com/dreammis/social-auto-upload",

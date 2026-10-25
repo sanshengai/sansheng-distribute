@@ -224,6 +224,17 @@ def doctor(paths, *, environ=None):
                         if not shutil.which('ffprobe'): errors.append('B站 CLI 需要 ffprobe 核验视频时长')
                     except (PublishError, OSError, ValueError):
                         errors.append('B站 CLI 本地配置、固定工具或私有凭证未就绪')
+            execute = adapter.get('execute')
+            if isinstance(execute, list) and any(isinstance(arg, str) and Path(arg).name == 'browser_engine.py' for arg in execute):
+                from browser_runtime import browser_config
+                from publish_core import PublishError
+                from runtime import inspect as inspect_runtime
+                try:
+                    browser_config(profile)
+                    if not inspect_runtime(profile)['ok']:
+                        errors.append('内置浏览器运行环境未就绪；运行 --prepare-runtime')
+                except (PublishError, OSError, ValueError):
+                    errors.append('内置浏览器需明确的本机 CDP 端点及固定运行环境')
             for account in accounts:
                 identities = account.get('public_identities', {})
                 identity = identities.get(platform) if isinstance(identities, dict) else None
@@ -235,7 +246,7 @@ def doctor(paths, *, environ=None):
 
 def initialize(path, *, platforms=(), account='main', write_scripts=None, env_file=None,
                appid_sha256=None, state_dir=None, browser_profile=None, public_identities=None,
-               runtime_dir=None, bilibili_cli=None):
+               runtime_dir=None, bilibili_cli=None, browser_engines=(), browser_cdp_url=None):
     """Create a private inactive profile exclusively. Never overwrite or authorize."""
     path = _path(path)
     if path.exists():
@@ -244,6 +255,15 @@ def initialize(path, *, platforms=(), account='main', write_scripts=None, env_fi
         raise EnvironmentError('账号别名不能为空')
     if set(platforms) - set(PLATFORMS):
         raise EnvironmentError('存在不支持的平台名称')
+    if (not isinstance(browser_engines, (list, tuple)) or any(p != 'x' or p not in platforms for p in browser_engines)):
+        raise EnvironmentError('当前内置浏览器仅可显式选择已配置的 x 文本预填')
+    if browser_engines and (not browser_profile or not browser_cdp_url):
+        raise EnvironmentError('内置浏览器需要专用 profile 与实际本机 CDP 端点')
+    if browser_cdp_url is not None:
+        from browser_runtime import endpoint
+        from publish_core import PublishError
+        try:browser_cdp_url = endpoint(browser_cdp_url)
+        except PublishError as exc:raise EnvironmentError(str(exc)) from exc
     if bilibili_cli is not None:
         if ('bilibili' not in platforms or not isinstance(bilibili_cli, dict)
                 or set(bilibili_cli) != {'directory', 'credentials', 'tid'}
@@ -263,6 +283,8 @@ def initialize(path, *, platforms=(), account='main', write_scripts=None, env_fi
         profile['state_dir'] = str(_path(state_dir, path.parent))
     if runtime_dir:
         profile['runtime_dir'] = str(_path(runtime_dir, path.parent))
+    if browser_cdp_url:
+        profile['browser_runtime'] = {'cdp_url': browser_cdp_url}
     if browser_profile and any(p != 'wechat' for p in platforms):
         profile['browser_profile'] = str(_path(browser_profile, path.parent))
     for platform in dict.fromkeys(platforms):
@@ -296,6 +318,10 @@ def initialize(path, *, platforms=(), account='main', write_scripts=None, env_fi
                 credentials=str(_path(bilibili_cli['credentials'], path.parent)))
             for action in ('execute', 'verify'):
                 adapter[action] = [sys.executable, '${SKILL_ROOT}/scripts/bilibili_adapter.py', action,
+                                   '--profile', str(path)]
+        elif platform in browser_engines:
+            for action in ('execute', 'verify'):
+                adapter[action] = [sys.executable, '${SKILL_ROOT}/scripts/browser_engine.py', action,
                                    '--profile', str(path)]
         profile['accounts'][f'{platform}-{account}'] = cfg
         profile['adapters'][platform] = adapter

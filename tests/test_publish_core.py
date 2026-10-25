@@ -101,6 +101,14 @@ class PublishTests(unittest.TestCase):
         self.store.save_observation(self.key, self.observation(), verified=True)
         self.assertEqual(self.store.status(self.key)['state'], 'draft_ready')
 
+    def test_chrome_editor_is_not_a_platform_draft(self):
+        self.authorize(); self.store.begin(self.manifest, 'wechat')
+        for scope in (None, 'chrome_session_only'):
+            value=self.observation(remote_id='browser-editor:RealTarget')
+            if scope:value['tracking_scope']=scope
+            with self.assertRaises(PublishError):self.store.save_observation(self.key,value,verified=True)
+        self.assertEqual(self.store.status(self.key)['state'],'submission_unknown')
+
     def test_remote_id_cannot_change(self):
         self.authorize(); self.store.begin(self.manifest, 'wechat')
         self.store.save_observation(self.key, self.observation(state='pending'), verified=False)

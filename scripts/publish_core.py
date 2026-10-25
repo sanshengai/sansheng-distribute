@@ -447,6 +447,11 @@ class Store:
                 if observation.get(field) != job[field]:
                     raise PublishError(f"读回身份不匹配：{field}")
             state = observation["state"]
+            if str(observation.get('remote_id', '')).startswith('browser-editor:') and observation.get('tracking_scope') != 'chrome_session_only':
+                raise PublishError('浏览器编辑身份必须明确标为临时会话')
+            if observation.get('tracking_scope') == 'chrome_session_only' and (
+                    job['endpoint'] != 'prefill' or state not in {'pending', 'prefill_ready'}):
+                raise PublishError('浏览器临时编辑会话不能充当平台草稿或已发布作品')
             expected = {"draft": "draft_ready", "prefill": "prefill_ready", "publish": "published", "broadcast": "broadcasted"}[job["endpoint"]]
             if state in {"draft_ready", "prefill_ready", "published", "broadcasted"}:
                 if state != expected or not verified or observation.get("content_verified") is not True:
@@ -469,6 +474,10 @@ class Store:
             if verified:
                 self.db.execute("DELETE FROM account_locks WHERE job_key=?", (key,))
         return self.status(key)
+
+    def needs_live_readback(self, key):
+        event = self.db.execute('SELECT data FROM events WHERE job_key=? ORDER BY id DESC LIMIT 1', (key,)).fetchone()
+        return bool(event and json.loads(event['data']).get('tracking_scope') == 'chrome_session_only')
 
 
 def _first_publication_trial(profile, target, manifest):
@@ -543,6 +552,9 @@ def preflight(manifest, ident, profile):
         if any(Path(a).name == 'bilibili_adapter.py' for a in argv):
             from bilibili_adapter import preflight_bilibili
             preflight_bilibili(manifest, target, profile, argv)
+        if any(Path(a).name == 'browser_engine.py' for a in argv):
+            from browser_engine import preflight_browser
+            preflight_browser(manifest, target, profile, argv)
     return dict(report, target_id=ident, endpoint=target['endpoint'], local_only=True)
 
 
@@ -614,7 +626,12 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
                             (job['platform'], job['account'], recover_remote_id, key)).fetchone():
             raise PublishError('候选草稿已归属其他发布任务')
     if job["state"] in {"draft_ready", "prefill_ready", "published", "broadcasted"}:
-        return job
+        if job['state'] == 'prefill_ready' and store.needs_live_readback(key):
+            # A local editor target is not a saved platform draft. Recheck that
+            # exact session on every reuse; never silently refill a lost editor.
+            resume = True
+        else:
+            return job
     snapshot_path = store.directory / "snapshots" / f"{key}.json"
     if resume:
         manifest = read_json(snapshot_path)

@@ -1,0 +1,39 @@
+# 包内浏览器引擎
+
+这条路线不依赖额外发布 Skill、上游源码仓或常驻 MCP 服务。浏览器依赖由本包固定安装，连接作者已登录的专用 Chrome。当前实现范围仅为 **X 的纯文本预填**，包括文案、普通井号文本和链接；图片、视频、长文章及最终发送尚未实现，其他平台继续现役 Agent 接力。不要把本模块的文本验收扩写为多平台发布完成。
+
+## 显式配置
+
+新安装可以在统一引导中选用，原有配置不会自动改换执行器：
+
+```sh
+python3 '<skill-root>/setup.py' --init --platform x --browser-engine x \
+  --profile '/private/directory/profile.json' \
+  --browser-profile '/private/directory/dedicated-chrome-profile' \
+  --browser-cdp-url 'http://127.0.0.1:9333' \
+  --public-identity 'x=@actual_handle'
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --prepare-runtime
+python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --doctor
+```
+
+端口与 profile 均从实际专用实例核对，示例端口不代表本机当前值。初始化不启动 Chrome、不登录、不启用能力。首次试验使用绑定具体清单的 `acceptance_runs`；真实账号文本预填验收通过后，才可在该账号配置中登记 `text:prefill`。没有新增媒体或公开发送能力。
+
+既有配置可将 X 的 execute / verify 显式指向 `${SKILL_ROOT}/scripts/browser_engine.py`，分别传同名阶段和 `--profile`。保留同一账本与账号绑定，不新建任务绕过未知结果。
+
+## 输入与执行
+
+交接目标使用 `content_type=text`、`endpoint=prefill`。`document_id` 可以指向已封存的纯文本来源；不把 HTML 或 Markdown 文章隐式改成普通帖。标题、两套不同描述、素材、字幕、独立封面及未映射平台字段均在写入前拒绝。平台当前长度或权限另按私有规格及实际页面核对，不截断文字。
+
+执行前核对实际 Chrome profile、X 编辑页来源、账号切换器中的唯一 handle 与主页入口，两处身份都须等于配置。编辑页同时可能存在主页输入框和弹窗输入框，只选择唯一可见的原生编辑弹窗。已有文字、媒体或正在处理的文件选择一律保留，不自动覆盖；落尝试记录后、实际填入前再核对一次空态，发现作者新稿即停止。
+
+执行期间该编辑器须由分发任务独占，不支持作者同时编辑：多次浏览器查询和原生输入之间不能提供跨进程原子锁。再次判空可以发现检查期间的修改，但不能保证拦住最后一次查询后恰好发生的人工输入。不要宣称此路线具备并发编辑保护。曾实测将检查与 `execCommand('insertText')` 合为一次页面任务，X 编辑器产生重复链接和换行变化，因此未采用该方法；失败试验只保留私有证据并清理本任务文字，没有发送。
+
+第一次填入前保存私有尝试记录和真实 Chrome target ID。即使填入后连接中断，也只读核对原窗口，不重新填稿。返回的 `browser-editor:<target-id>` 明确是 **浏览器会话身份**，不是 X 草稿 ID 或推文 ID。
+
+独立 verify 重新连接同一实例，核对同一窗口、账号、完整文案及无新增媒体，成功才报告 `prefill_ready`，同时记录 `tracking_scope=chrome_session_only`、`platform_draft_saved=false` 和 `final_click_available=false`。这不保证关闭浏览器后仍有平台草稿。每次 `run / resume` 再次读取当前窗口；窗口丢失、文字变化或加入媒体即报无法确认，不返回陈旧成功，不补填。`status` 仅显示上次观察记录。
+
+## 来源与证据范围
+
+借鉴固定版宝玉 X 脚本中按平台原生编辑器定位、分离上传与发送的做法；实现为本包代码，没有复制其外部运行依赖。未采用“登录 Cookie 存在即认定账号正确”“上传超时仍继续发送”或全页媒体计数作为成功判据。固定版本与许可证见 [来源清单](sources.json)。
+
+2026-10-25 的专用 Chrome 真实联调通过了统一入口预检查、封存文案预填和新连接只读续跑；没有发送。离线测试覆盖已有草稿、错误账号、重复执行、填入后丢失响应、窗口与文字变化、未映射字段和临时身份不能充当平台草稿。真实证据只在操作者私有任务目录，公开包不包含账号、浏览器配置或账本。

@@ -220,6 +220,40 @@ class EnvironmentTests(unittest.TestCase):
                 env.initialize(self.home / 'rejected.json', platforms=['x'], public_identities=identities)
             self.assertFalse((self.home / 'rejected.json').exists())
 
+    def test_bundled_x_engine_initialization_is_explicit_and_inactive(self):
+        path=self.home/'x-engine.json'
+        env.initialize(path, platforms=['x'], browser_profile='dedicated browser',
+            public_identities={'x':'@demo'},browser_engines=['x'],browser_cdp_url='http://127.0.0.1:9333/')
+        data=env.load_profile(path)
+        self.assertEqual(data['browser_runtime']['cdp_url'],'http://127.0.0.1:9333')
+        self.assertTrue(data['adapters']['x']['execute'][1].endswith('/scripts/browser_engine.py'))
+        self.assertEqual(data['adapters']['x']['enabled_capabilities'],[])
+        self.assertEqual(data['acceptance_runs'],[])
+        with patch('runtime.inspect',return_value={'ok':False}):
+            self.assertFalse(env.doctor(self.paths(profile=path),environ={})['ok'])
+        with patch('runtime.inspect',return_value={'ok':True}):
+            self.assertTrue(env.doctor(self.paths(profile=path),environ={})['ok'])
+        self.assertFalse((self.home/'dedicated browser').exists())
+
+    def test_bundled_engine_invalid_config_leaves_no_file(self):
+        for options in ({'browser_engines':['weibo']}, {'browser_engines':['x']},
+                        {'browser_engines':['x'],'browser_profile':'dedicated','browser_cdp_url':'https://remote.test:9222'},
+                        {'browser_engines':'x'}):
+            path=self.home/'bad-engine.json'
+            with self.assertRaises(env.EnvironmentError):env.initialize(path,platforms=['x'],**options)
+            self.assertFalse(path.exists())
+
+    def test_setup_can_select_bundled_engine_without_an_extra_skill(self):
+        path=self.home/'cli-x.json'
+        result=subprocess.run([sys.executable,str(ROOT/'setup.py'),'--init','--profile',str(path),
+            '--platform','x','--browser-engine','x','--browser-cdp-url','http://127.0.0.1:9333',
+            '--browser-profile',str(self.home/'dedicated'),'--runtime-dir',str(self.home/'absent-runtime'),
+            '--public-identity','x=@demo'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,2)  # Configuration is saved; optional runtime is not installed.
+        value=json.loads(result.stdout)
+        self.assertTrue(value['created']);self.assertFalse(value['configuration_ready'])
+        self.assertEqual(env.load_profile(path)['adapters']['x']['enabled_capabilities'],[])
+
     def test_write_discovery_uses_installed_entry(self):
         scripts = self.home / '.agents/skills/sansheng-write/scripts'
         scripts.mkdir(parents=True); (scripts / 'wechat_api.py').write_text('')
