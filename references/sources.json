@@ -259,6 +259,38 @@
         }
       ],
       "adoption": "Read already-loaded native scheduling component, account-version bounds and beforePost timing serialization. Native bounds vary by account; scheduled timestamp is serialized as UNIX seconds, immediate uses zero. Independently implemented optional visible-editor prefill and read-only verification; no frontend source copied and no private request constructed or replayed. Live scheduled prefill, submission, native acceptance and independent scheduled-post readback remain unverified; scheduled publishing is rejected."
+    },
+    {
+      "platform": "wechat_channels_creator_list",
+      "reviewed_at": "2026-10-26",
+      "creator_url": "https://channels.weixin.qq.com/platform/post/list",
+      "assets": [
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/content/finder-helper-content/res/static/js/async/539.dab4b66f.js",
+          "sha256": "4a76ad301a4b1f9fb62222e6bb5aaffb59e2a32ae05f3c4fadefe15493284690"
+        },
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/content/finder-helper-content/res/static/js/async/858.7de30b55.js",
+          "sha256": "52d0727faeb3c9dbad9b7f4350319d7ee2b8fa8f1e0c39fc5c43e918061555f0"
+        },
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/content/finder-helper-content/res/static/js/async/755.902668b9.js",
+          "sha256": "1b69b951bde7b0058a24ad585d650bca9c3f900d02aaca59917fa09bffda5c6a"
+        },
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/content/finder-helper-content/res/static/js/async/424.877c2858.js",
+          "sha256": "d6e512148a27c0958c6239e70168e5567cf1b94c1718d9d46ad3bd2ae02a0b3a"
+        },
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/finder-helper-web/res/static/js/chunk-common.7dbff146.js",
+          "sha256": "71d7a0463fbc748506b470578c12f8648cfafb1c9087a7c12f017c0407806686"
+        },
+        {
+          "url": "https://res.wx.qq.com/t/wx_fed/finder/helper/finder-helper-web/res/static/js/login.18085ae7.js",
+          "sha256": "5cdb88a336e0614b29e38bab82b9e6664439d42eca48800a1d72d2749b157ccc"
+        }
+      ],
+      "adoption": "Official static frontend contract study: auth_data finderUser.finderUsername, native request _log_finder_id, exact post_list objectId, desc.shortTitle array, independent processing/visibility/schedule/originality states and visible post-feed-item fields. Original independent readonly helper only; no frontend code vendored or private request constructed/replayed. Existing first-season projected records are historical corroboration, not raw new-engine live acceptance. Login QR received in an unfocused owned window; authenticated readback and public-to-native identity binding still pending. No upload/send capability added."
     }
   ]
 }
