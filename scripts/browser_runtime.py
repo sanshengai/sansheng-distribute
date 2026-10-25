@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from environment import load_profile
 from publish_core import PublishError
@@ -105,15 +106,14 @@ def connect(profile, *, writing=False):
 
 
 @contextlib.contextmanager
-def background_tab(anchor):
-    """Create an owned identity tab without activating Chrome or another tab."""
+def _owned_page(anchor, params):
     context = anchor.context
     session = context.new_cdp_session(anchor)
     owned = None
     target = None
     try:
         info = session.send('Target.getTargetInfo')['targetInfo']
-        params = dict(url='about:blank', background=True)
+        params = dict(params)
         if info.get('browserContextId'):
             params['browserContextId'] = info['browserContextId']
         with context.expect_page(timeout=10000) as created:
@@ -137,6 +137,37 @@ def background_tab(anchor):
                 session.send('Target.closeTarget', dict(targetId=target))
         finally:
             session.detach()
+
+
+@contextlib.contextmanager
+def background_tab(anchor):
+    """Create an owned identity tab without activating Chrome or another tab."""
+    with _owned_page(anchor,dict(url='about:blank',background=True)) as page:
+        yield page
+
+
+@contextlib.contextmanager
+def background_window(anchor, *, cdp_url):
+    """Owned active tab in a separate no-focus window for native media work.
+
+    Older Chrome builds can ignore unknown protocol parameters. Require the
+    actual local protocol's explicit focus option before creating the window;
+    never fall back to a focused window or change an existing visible tab.
+    """
+    try:
+        with urlopen(endpoint(cdp_url)+'/json/protocol',timeout=5) as response:
+            raw=response.read(4*1024*1024+1)
+        if len(raw)>4*1024*1024:raise ValueError('unexpected protocol size')
+        protocol=json.loads(raw)
+        commands=[c for d in protocol['domains'] if d['domain']=='Target'
+                  for c in d.get('commands',[]) if c['name']=='createTarget']
+        if len(commands)!=1 or not any(p.get('name')=='focus' and p.get('type')=='boolean'
+                                     for p in commands[0].get('parameters',[])):
+            raise ValueError('explicit focus option unavailable')
+    except Exception as exc:
+        raise PublishError('当前 Chrome 未证实支持不抢焦点的独立窗口；不创建窗口或降级激活') from exc
+    with _owned_page(anchor,dict(url='about:blank',newWindow=True,background=False,focus=False)) as page:
+        yield page
 
 
 def select_page(connection, platform, *, target_id=None, path=None):

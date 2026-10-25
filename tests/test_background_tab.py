@@ -17,9 +17,9 @@ class Page:
 
 
 class Context:
-    def __init__(self, *, unrelated=False, error=False, private=True):
+    def __init__(self, *, unrelated=False, error=False, private=True, window=False):
         self.calls=[];self.detaches=0;self.expecting=False;self.error=error
-        self.private=private;self.anchor=Page(self,'original')
+        self.private=private;self.window=window;self.anchor=Page(self,'original')
         self.created=Page(self,'unrelated' if unrelated else 'owned')
     def new_page(self):raise AssertionError('foreground new_page is forbidden')
     @contextlib.contextmanager
@@ -40,7 +40,9 @@ class Context:
                     return {'targetInfo':info}
                 if method=='Target.createTarget':
                     assert owner.expecting
-                    assert params['background'] is True
+                    if owner.window:
+                        assert params['newWindow'] is True and params['focus'] is False and params['background'] is False
+                    else:assert params['background'] is True
                     return {'targetId':'owned'}
                 if method=='Target.closeTarget':return {'success':True}
                 raise AssertionError(method)
