@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import douyin_cover as c
-from publish_core import PublishError
+from publish_core import PublishError, digest
 
 JPEG='data:image/jpeg;base64,'+base64.b64encode(b'native-transcoded-image').decode()
 
@@ -128,8 +128,8 @@ class CoverTests(unittest.TestCase):
 
     def test_extra_native_crop_stops_instead_of_claiming_source_preserved(self):
         original=c.preview
-        def cropped(page,role):
-            value=original(page,role)
+        def cropped(page,role,**kwargs):
+            value=original(page,role,**kwargs)
             if role=='portrait':value['width']-=5
             return value
         with patch.object(c,'preview',side_effect=cropped):
@@ -159,6 +159,55 @@ class CoverTests(unittest.TestCase):
     def test_rotated_signature_keeps_object_identity(self):
         self.upload();self.page.images['portrait']['src']=self.page.url('portrait').replace('expiring=1','expiring=2')
         c.verify(self.page,self.pack,{'covers':self.records});self.assertEqual(len(self.page.uploads),2)
+
+    def published(self):
+        return dict(covers={'vertical':'tos-cn-i-fixture/object_portrait',
+                            'horizontal':'tos-cn-i-fixture/object_landscape'})
+
+    def saved(self):
+        return dict(pack_digest=digest(self.pack),covers=copy.deepcopy(self.records))
+
+    def test_published_covers_bind_both_roles_to_original_upload_and_not_signed_url(self):
+        self.upload();before=list(self.page.uploads)
+        result=c.post_cover_bindings(self.published(),self.pack,self.saved())
+        self.assertEqual(set(result),{'portrait','landscape'})
+        self.assertEqual(result['portrait']['source_sha256'],self.assets[0]['sha256'])
+        self.assertNotIn('expiring',str(self.records));self.assertNotIn('https://',str(self.records))
+        self.assertEqual(self.page.uploads,before)
+
+    def test_published_swapped_or_replaced_covers_fail_even_when_dimensions_same(self):
+        self.upload();details=self.published()
+        bad=[dict(covers=dict(details['covers'],vertical=details['covers']['horizontal'])),
+             dict(covers=dict(details['covers'],horizontal='tos-cn-i-fixture/other')),
+             dict(covers={'vertical':details['covers']['vertical']}),{},dict(covers=None)]
+        for value in bad:
+            with self.subTest(value=value),self.assertRaises(PublishError):
+                c.post_cover_bindings(value,self.pack,self.saved())
+
+    def test_legacy_preview_receipts_remain_readable_but_cannot_claim_published_source_proof(self):
+        self.upload();saved=self.saved()
+        for record in saved['covers'].values():record.pop('source_object')
+        c.verify(self.page,self.pack,saved)
+        with self.assertRaisesRegex(PublishError,'不补造旧回执'):
+            c.post_cover_bindings(self.published(),self.pack,saved)
+
+    def test_new_receipt_host_uri_and_original_bindings_are_not_replaceable(self):
+        self.upload();good=self.saved()
+        changes=[('source_asset_id','landscape'),('source_sha256','0'*64),('native_sha256',''),
+                 ('object_key','0'*64),('width',True),('height',0),
+                 ('source_object',dict(host='p0-creator-media-private.douyin.com.evil.org',uri='tos-cn-i-fixture/object_portrait')),
+                 ('source_object',dict(host='p0-creator-media-private.douyin.com',uri='tos-cn-i-fixture/other')),
+                 ('source_object',dict(host='p0-creator-media-private.douyin.com',uri='tos-cn-i-fixture/object_portrait',token='unwanted'))]
+        for field,value in changes:
+            saved=copy.deepcopy(good);saved['covers']['portrait'][field]=value
+            with self.subTest(field=field),self.assertRaises(PublishError):
+                c.post_cover_bindings(self.published(),self.pack,saved)
+        for saved in [dict(good,pack_digest='changed'),dict(good,covers={}),dict(good,covers=dict(good['covers'],extra={}))]:
+            with self.assertRaises(PublishError):c.post_cover_bindings(self.published(),self.pack,saved)
+
+    def test_current_preview_does_not_accept_tampered_new_object_receipt(self):
+        self.upload();saved=self.saved();saved['covers']['portrait']['source_object']['uri']='tos-cn-i-fixture/other'
+        with self.assertRaises(PublishError):c.verify(self.page,self.pack,saved)
 
     def test_saved_preview_untrusted_host_incomplete_or_bad_dimensions_rejected(self):
         self.upload();original=copy.deepcopy(self.page.images['portrait'])

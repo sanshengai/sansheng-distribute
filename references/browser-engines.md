@@ -122,6 +122,8 @@ python3 '<skill-root>/setup.py' --profile '/private/directory/profile.json' --do
 
 ## 抖音视频预填
 
+新封面回执另存原生对象的 host/URI，不保存带签名的 URL；`douyin_cover.post_cover_bindings` 可将独立作品详情中的横竖封面逐项对应到原任务、原图摘要和该对象。旧回执维持预填查询兼容，但缺少对象来源时不能倒补发布证明。此辅助校验仅完成离线验证，未接入最终发送；不能单独报告完整内容核验或已发布。
+
 显式选择 `--platform douyin --browser-engine douyin`，并用 `--public-identity 'douyin=实际抖音号'` 绑定原生首页显示的编号；昵称不能代替。初始化仍不启用能力。首次试验使用精确 `acceptance_runs`，不自动替换已有 Agent 执行器。
 
 当前仅接受 `video:prefill`，一个 MP4、非空标题、简介和明确的单选声明；可附横竖封面、按精确名称选择已有合集，并选择最多五个不同的原生话题。五个是本引擎的有限支持范围，不代表平台总限制。话题名称可带前导井号，不含空白或内部井号。字幕、合集 ID、定时及其他未映射字段在上传前拒绝，不能遗漏后报告完成。`ai_generated=true` 对应“内容由AI生成”；`false` 不自动推断“无需添加自主声明”，须明确声明事实。

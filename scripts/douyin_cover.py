@@ -80,7 +80,7 @@ def encode(page, asset, role):
                 native_sha256=hashlib.sha256(native).hexdigest())
 
 
-def preview(page, role):
+def preview(page, role, *, include_object=False):
     image = unique(control(page, role).locator('img'), '已保存封面')
     value = image.evaluate('(n)=>({src:n.currentSrc,width:n.naturalWidth,height:n.naturalHeight,complete:n.complete})')
     parts = urlsplit(value.get('src', ''))
@@ -90,7 +90,11 @@ def preview(page, role):
             or type(value.get('width')) is not int or type(value.get('height')) is not int
             or value['width']<=0 or value['height']<=0):
         raise PublishError('抖音已保存封面的来源或图片尚不能核对')
-    return dict(object_key=digest([parts.netloc,match.group(1)]), width=value['width'], height=value['height'])
+    result=dict(object_key=digest([parts.netloc,match.group(1)]), width=value['width'], height=value['height'])
+    if include_object:
+        # Keep only the non-secret object identity, never the signed URL.
+        result['source_object']=dict(host=parts.netloc,uri=match.group(1))
+    return result
 
 
 def prepare(page, assets, roles):
@@ -177,7 +181,7 @@ def upload(page, assets, prepared, *, progress, receipt):
           const im=ns.length===1?ns[0].querySelector('img'):null;
           return im&&im.complete&&im.naturalWidth>0;
         }''',arg=ROLES[role][0],timeout=15000)
-        actual=preview(page,role)
+        actual=preview(page,role,include_object=True)
         raw=control(page,role).locator('img').get_attribute('src')
         if raw in originals[role] or abs(actual['width']-source['width'])>1 or abs(actual['height']-source['height'])>1:
             raise PublishError('抖音封面保存结果未改变或发生额外裁切；不报告完成')
@@ -193,8 +197,45 @@ def verify(page, pack, saved):
     assets={a['id']:a for a in pack['assets']}
     for role,ident in roles.items():
         record=receipts[role]
+        fields=('object_key','width','height')+(('source_object',) if 'source_object' in record else ())
         if (record.get('source_asset_id')!=ident or record.get('source_sha256')!=assets[ident]['sha256']
                 or not re.fullmatch(r'[0-9a-f]{64}',record.get('native_sha256',''))
-                or preview(page,role)!={k:record.get(k) for k in ('object_key','width','height')}):
+                or preview(page,role,include_object='source_object' in record)!={k:record.get(k) for k in fields}):
             raise PublishError('抖音已保存封面与原任务不符；不重传或改封面')
     if roles:restore_video(page)
+
+
+def post_cover_bindings(details, pack, saved):
+    """Bind requested published covers to original upload receipts, without I/O.
+
+    This is one part of post verification; it cannot establish publication,
+    account identity, video identity or other fields. Legacy receipts cannot
+    gain object identities retrospectively from the published work itself.
+    """
+    if saved.get('pack_digest')!=digest(pack):
+        raise PublishError('抖音封面发布核验与原任务不符')
+    roles=requested(pack);receipts=saved.get('covers',{})
+    if not isinstance(receipts,dict) or set(receipts)!=set(roles):
+        raise PublishError('抖音发布封面回执缺失或包含未请求角色')
+    assets={a['id']:a for a in pack['assets']};result={}
+    for role,ident in roles.items():
+        record=receipts[role]
+        try:
+            obj=record['source_object']
+            if (not isinstance(obj,dict) or set(obj)!={'host','uri'}
+                    or not isinstance(obj['host'],str)
+                    or not re.fullmatch(r'p\d+-creator-media-private\.douyin\.com',obj['host'])
+                    or not isinstance(obj['uri'],str)
+                    or not re.fullmatch(r'tos-cn-i-[a-z0-9-]+/[A-Za-z0-9_-]+',obj['uri'])
+                    or record['object_key']!=digest([obj['host'],obj['uri']])
+                    or record['source_asset_id']!=ident
+                    or record['source_sha256']!=assets[ident]['sha256']
+                    or not isinstance(record['native_sha256'],str)
+                    or not re.fullmatch(r'[0-9a-f]{64}',record['native_sha256'])
+                    or any(type(record[k]) is not int or not 0<record[k]<=4096 for k in ('width','height'))
+                    or details['covers'][{'portrait':'vertical','landscape':'horizontal'}[role]]!=obj['uri']):
+                raise ValueError()
+        except (KeyError,TypeError,ValueError) as exc:
+            raise PublishError('抖音发布封面不能对应原图及上传对象；不补造旧回执') from exc
+        result[role]=dict(source_asset_id=ident,source_sha256=record['source_sha256'],object_key=record['object_key'])
+    return result
