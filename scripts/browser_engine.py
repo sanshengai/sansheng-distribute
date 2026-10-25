@@ -14,7 +14,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from browser_runtime import browser_config, connect, select_page
+from browser_runtime import browser_config, connect, select_page, render_background_page
 from environment import load_profile
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
@@ -44,11 +44,17 @@ def check_pack(pack):
     if pack['platform'] == 'weibo':
         from weibo_browser import check_pack as check_weibo
         return check_weibo(pack)
-    if pack['platform'] != 'x' or pack['endpoint'] != 'prefill' or pack['content_type'] != 'text':
-        raise PublishError('当前引擎仅承接 X text:prefill，不能公开发送或假称支持媒体')
+    if (pack['platform'] != 'x' or pack['endpoint'] != 'prefill'
+            or pack['content_type'] not in {'text','images'}):
+        raise PublishError('当前引擎仅承接 X text/images:prefill，不能公开发送或接收视频')
     document = pack['document']
-    if pack['assets'] or (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
-        raise PublishError('当前 X 文本引擎不承接媒体、文章、封面、字幕或平台扩展字段')
+    if (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
+        raise PublishError('当前 X 引擎不承接文章、独立封面、字幕或平台扩展字段')
+    if pack['content_type']=='images':
+        from x_images import check
+        check(pack)
+    elif pack['assets']:
+        raise PublishError('X 纯文本目标不能静默省略素材；图片应选择 images 类型')
     fields = pack['fields']
     if fields['title'] or (fields['text'] and fields['description'] and fields['text'] != fields['description']):
         raise PublishError('X 无独立标题或两套描述；交回制作端明确完整文案')
@@ -166,10 +172,16 @@ def dispatch(request_path, action, profile, lock_fd):
     with connect(profile, writing=action=='execute') as connection:
         page = select_page(connection, 'x', path='/compose/post',
                            target_id=saved['target_id'] if action=='verify' else None)
+        render_background_page(page)
         assert_identity(page, identity); assert_no_warning(page)
         if action == 'execute':
             # Never overwrite a restored or manually edited draft.
             empty_editor(page)
+            if pack['assets']:
+                from browser_assets import stage
+                import x_images
+                assets=stage(pack,request_path)
+                x_images.prepare(page,assets)
             saved = dict(bound, target_id=target_id(page), state='attempted', tracking_scope='chrome_session_only')
             # Persist before the first browser mutation. There is no click action.
             fd = os.open(marker, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
@@ -182,10 +194,19 @@ def dispatch(request_path, action, profile, lock_fd):
             node.fill(pack['fields']['composed_text'])
             if node.inner_text() != pack['fields']['composed_text']:
                 raise PublishError('X 实际文案与封存包不符；先只读检查原稿')
+            if pack['assets']:
+                assert_identity(page,identity);assert_no_warning(page);assert_no_media(page)
+                if editor(page).inner_text()!=pack['fields']['composed_text']:
+                    raise PublishError('X 图片选择前文案改变；不继续上传')
+                saved['images']=x_images.upload(page,assets)
             saved['state']='filled'; write_json(marker, saved)
         else:
             node = editor(page)
-            assert_no_media(page)
+            if pack['assets']:
+                import x_images
+                x_images.verify(page,pack,saved)
+            else:
+                assert_no_media(page)
             if node.inner_text() != pack['fields']['composed_text']:
                 raise PublishError('X 原编辑会话文案已变；不报告预填完成')
         result = {k:pack[k] for k in ('manifest_digest','target_id','platform','account')}
@@ -194,7 +215,10 @@ def dispatch(request_path, action, profile, lock_fd):
             observed_account_identity=identity, tracking_scope='chrome_session_only',
             platform_draft_saved=False, final_click_available=False)
         if action=='verify':
-            result.update(content_verified=True, verified_pack_digest=digest(pack), verified_asset_ids=[])
+            result.update(content_verified=True, verified_pack_digest=digest(pack),
+                          verified_asset_ids=[a['id'] for a in pack['assets']])
+        if pack['assets']:
+            result['media_tracking_scope']='local_blob_preview_only'
         return result
 
 

@@ -33,6 +33,7 @@ class Page:
         self.url='https://x.com/compose/post';self.handle='@demo';self.text='\n'
         self.media=0;self.pending_files=0;self.modals=1;self.writes=[];self.crash_after_fill=False
         self.context=Context(self)
+    def evaluate(self,script):return {'outer':828,'inner':828,'hidden':True}
     def locator(self,selector):
         return Node(self,'switch' if 'AccountSwitcher' in selector else 'link' if 'Profile_Link' in selector else
                     'modal' if 'aria-modal' in selector else 'alert')

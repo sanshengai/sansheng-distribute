@@ -161,6 +161,29 @@ def select_page(connection, platform, *, target_id=None, path=None):
     return matches[0]
 
 
+def render_background_page(page):
+    """Realize Chrome's unpainted background viewport without activating it.
+
+    Chrome can report a normal inner viewport but zero outerHeight for a newly
+    created background target. X then renders a zero-height composer. A native
+    capture realizes the surface; its pixels are discarded, never saved/logged.
+    """
+    metrics='()=>({inner:innerHeight,outer:outerHeight,hidden:document.visibilityState==="hidden"})'
+    value=page.evaluate(metrics)
+    if value['outer']>0:
+        return
+    if not value['hidden'] or value['inner']<=0:
+        raise PublishError('后台页面视口尚未就绪；不激活前台或继续填稿')
+    session=page.context.new_cdp_session(page)
+    try:
+        session.send('Page.captureScreenshot', dict(format='png',fromSurface=True,
+                                                   captureBeyondViewport=False))
+    finally:
+        session.detach()
+    if page.evaluate(metrics)['outer']<=0:
+        raise PublishError('后台页面原生渲染未就绪；不切到前台重试')
+
+
 def inspect(profile):
     with connect(profile) as connection:
         counts = {p:0 for p in ORIGINS}
