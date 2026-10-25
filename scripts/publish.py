@@ -35,6 +35,7 @@ def main():
         p = sub.add_parser(name); p.add_argument("campaign_id")
         if name != "batch-status": p.add_argument("--target", action="append")
         if name == "batch-authorize": p.add_argument("--statement", required=True)
+        if name in {"batch-run", "batch-resume"}: p.add_argument("--max-parallel", type=int, choices=(1, 2), default=1)
     args = parser.parse_args()
     store = None
     try:
@@ -65,7 +66,7 @@ def main():
                     result = campaign_status(args.campaign_id, store)
                 else:
                     result = run_campaign(args.campaign_id, load_profile(args.profile), store, args.target,
-                                          resume=args.action == "batch-resume")
+                                          resume=args.action == "batch-resume", max_parallel=args.max_parallel)
             elif args.action == "status":
                 result = store.status(args.key)
             elif args.action == "return-write":

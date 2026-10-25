@@ -1,19 +1,50 @@
 {
-  "reviewed_at": "2026-10-24",
+  "reviewed_at": "2026-10-25",
   "sources": [
     {
       "repository": "https://github.com/JimLiu/baoyu-skills",
       "commit": "1567581c26ec29f4216c6e6835415bf30343b0e3",
       "license": "MIT",
-      "scope": ["baoyu-post-to-wechat", "baoyu-post-to-x", "baoyu-post-to-weibo"],
+      "scope": [
+        "baoyu-post-to-wechat",
+        "baoyu-post-to-x",
+        "baoyu-post-to-weibo"
+      ],
       "adoption": "workflow study; no upstream executable vendored; Weibo upstream prefill is not final publication"
     },
     {
       "repository": "https://github.com/dreammis/social-auto-upload",
       "commit": "3847fff01f5434a8a32829833163cd6723cabc59",
       "license": "MIT; social-auto-upload SKILL states MIT-0",
-      "scope": ["douyin", "bilibili", "xiaohongshu"],
+      "scope": [
+        "douyin",
+        "bilibili",
+        "xiaohongshu"
+      ],
       "adoption": "review candidate; not installed; tencent denotes WeChat Channels, not Tencent Video"
+    },
+    {
+      "repository": "https://github.com/xpzouying/xiaohongshu-mcp",
+      "commit": "7797fd375aba02dcd33afe143f6bee13e5870859",
+      "license": "Apache-2.0",
+      "scope": [
+        "video publish flow",
+        "prefill distinction",
+        "risk and open PR review"
+      ],
+      "adoption": "audit only; no executable or copied code installed; video MCP final click is incompatible with author-only submission"
+    },
+    {
+      "repository": "https://github.com/biliup/biliup",
+      "release": "v1.3.4",
+      "asset": "biliupR-v1.3.4-aarch64-macos.tar.xz",
+      "sha256": "1bfdb13a092600907e6111c0ed08c30af4abe5c8ed0b041e6d98b94efe376d46",
+      "scope": [
+        "optional local CLI installation",
+        "login",
+        "upload argument planning"
+      ],
+      "adoption": "optional private binary download; no binary vendored; real CLI publication not enabled"
     }
   ]
 }

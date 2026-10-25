@@ -1,4 +1,4 @@
-"""Sequential multi-target dispatch using the existing ledger and account locks.
+"""Bounded multi-target dispatch using the existing ledger and account locks.
 
 Campaign definitions are immutable local snapshots, not a second job ledger.
 Only publish_core.run may perform remote work. Recovery never submits prepared jobs.
@@ -6,8 +6,9 @@ Only publish_core.run may perform remote work. Recovery never submits prepared j
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
-from publish_core import HEX, PublishError, digest, read_json, run, target_of, validate, write_json
+from publish_core import HEX, PublishError, Store, digest, read_json, run, target_of, validate, write_json
 
 FINISHED = {"draft_ready", "prefill_ready", "published", "broadcasted"}
 
@@ -145,16 +146,39 @@ def authorize_campaign(campaign_id, store, statement, target_ids=None):
     return {"campaign_id": campaign_id, "authorized_targets": selected, "grants": grants}
 
 
-def run_campaign(campaign_id, profile, store, target_ids=None, *, resume=False):
-    """Run sequentially; isolate failures; recover begun jobs without resending.
+def run_campaign(campaign_id, profile, store, target_ids=None, *, resume=False, max_parallel=1):
+    """Bound concurrency by platform; recover begun jobs without resending.
 
     resume=True is strictly read-only at the remote side: prepared jobs are left
     prepared. An absence_verified readback may reset a job to prepared, but it
     cannot cause a second execution in this invocation.
     """
+    if type(max_parallel) is not int or max_parallel not in (1, 2):
+        raise PublishError("并行数只支持 1 或 2")
     definition = _load(store, campaign_id)
     manifest = definition["manifest"]
     selected = _select(definition["target_ids"], target_ids)
+    if max_parallel == 2:
+        # Each worker owns its SQLite connection. A platform stays serial even
+        # across different accounts, so a shared creator tab cannot be raced.
+        groups = {}
+        for ident in selected:
+            groups.setdefault(target_of(manifest, ident)["platform"], []).append(ident)
+
+        def worker(ids):
+            local = Store(store.directory)
+            try:
+                return run_campaign(campaign_id, profile, local, ids, resume=resume)["outcomes"]
+            finally:
+                local.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(worker, groups.values()))
+        outcomes = {key: value for result in results for key, value in result.items()}
+        report = campaign_status(campaign_id, store)
+        report.update(selected_targets=selected, outcomes={i: outcomes[i] for i in selected},
+                      readonly=resume, max_parallel=max_parallel)
+        return report
     outcomes = {}
     for ident in selected:
         error_path = store.directory / "campaigns" / campaign_id / f"{ident}.json"
@@ -186,5 +210,5 @@ def run_campaign(campaign_id, profile, store, target_ids=None, *, resume=False):
             write_json(error_path, {"error": error, "job_updated_at": stamp})
             outcomes[ident] = "error"
     report = campaign_status(campaign_id, store)
-    report.update(selected_targets=selected, outcomes=outcomes, readonly=resume)
+    report.update(selected_targets=selected, outcomes=outcomes, readonly=resume, max_parallel=max_parallel)
     return report

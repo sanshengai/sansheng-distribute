@@ -8,7 +8,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/sanshengai/sansheng-distribute)](https://github.com/sanshengai/sansheng-distribute/stargazers)
 [![GitHub last commit](https://img.shields.io/github/last-commit/sanshengai/sansheng-distribute)](https://github.com/sanshengai/sansheng-distribute/commits/main)
 
-**0.3.0 实验版。** 已完成公众号真实草稿的 API 建稿、网页插入音视频、保存重开与官方读回测试；这不等于验证了所有账号，也不等于已测试公开发表或群发。其他平台提供适配与检查流程，尚未完成真实账号端到端验收。本项目不承诺安装后全平台一键发布。
+**实验版。** 已完成公众号真实草稿的 API 建稿、网页插入音视频、保存重开与官方读回测试；这不等于验证了所有账号，也不等于已测试公开发表或群发。部分视频平台已有单账号实测，具体范围见[平台能力与证据](references/platforms.md)；新预填助手与 CLI 路线另行验收。本项目不承诺安装后全平台一键发布。
 
 ## 它帮你做什么
 
@@ -160,7 +160,7 @@ python3 -m unittest discover -s tests
 
 **An experimental publishing handoff skill for AI agents.** Give it finished articles, images or videos, explicit destinations and media insertion positions. It validates the package, tracks each destination separately, verifies remote results and resumes interrupted work without blindly submitting again.
 
-Version **0.3.0 is experimental**. A real WeChat Official Account draft has passed API creation, browser insertion of audio/video, save/reopen and official API readback. Public publication, mass messaging and an entirely API-based media workflow have not been validated. Other platform adapters have not completed real-account end-to-end acceptance. This is not a promise of universal one-click publishing.
+**Experimental.** A real WeChat Official Account draft has passed API creation, browser insertion of audio/video, save/reopen and official API readback. Public publication, mass messaging and an entirely API-based media workflow have not been validated. Some video platforms have single-account acceptance evidence; see [platform evidence](references/platforms.md). The new optional prefill helper and CLI route require separate acceptance. This is not a promise of universal one-click publishing.
 
 The core requires **macOS/Linux and Python 3.10+**, uses the standard library and does not require Write. WeChat API drafts optionally use the separately installed [sansheng-write](https://github.com/sanshengai/sansheng-write) module. Browser actions rely on the current agent's authorized browser tools. Xiaohongshu stops at a draft or prefilled page; the author makes the final click.
 

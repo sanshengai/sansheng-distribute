@@ -1,6 +1,6 @@
 # 多平台批量任务
 
-同一封存 manifest 的多个 `targets` 可以组成一次批量任务，保持各平台的账号、终点、授权和独立读回。目标逐个串行执行；一个目标失败后继续其他目标，同账号未知提交仍受既有锁保护。
+同一封存 manifest 的多个 `targets` 可以组成一次批量任务，保持各平台的账号、终点、授权和独立读回。默认串行；可选 `--max-parallel 2` 让不同平台最多两个目标并行，同平台保持串行。一个目标失败后继续其他目标，同账号未知提交仍受既有锁保护。启用前读[提效与可选命令行](efficient-dispatch.md)。
 
 ## 调用接口
 
@@ -9,7 +9,7 @@ Python 模块 `scripts/campaign.py` 复用 `publish_core.Store`，供 CLI 和当
 ```python
 prepare_campaign(manifest_path, store, target_ids=None)
 authorize_campaign(campaign_id, store, statement, target_ids=None)
-run_campaign(campaign_id, profile, store, target_ids=None, resume=False)
+run_campaign(campaign_id, profile, store, target_ids=None, resume=False, max_parallel=1)
 campaign_status(campaign_id, store)
 ```
 

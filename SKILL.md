@@ -9,6 +9,10 @@ metadata:
 
 当前为实验版。接收生产端定稿和媒体位置，按指定平台、账号、终点执行；平台能力逐项验收，不因安装 Skill 就开启发送。
 
+优化批量上传、复用浏览器步骤、试用 B 站 CLI 或评估小红书 MCP 时，按需读[发布提效与可选命令行](references/efficient-dispatch.md)。两平台并行须显式启用；小红书仍由作者最终点击，受限账号只交付本地包。可选 CLI 当前仅安装、登录和规划，不承担真实投稿。
+
+读取私有 profile 的 `distribution_preferences` 后再选择路线与并行数；该字段是作者偏好，不能扩大 `accounts`、已验收能力或授权终点。未配置的平台不因偏好表中出现就自动登录或启用。
+
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
 先解析当前 `SKILL.md` 所在真实目录作为 Skill 根；下列 `scripts/...` 路径相对该目录，不相对用户工程。核心需 macOS/Linux、Python 3.10+ 及执行本机命令的工具（使用 POSIX 文件锁）；不能据此宣称支持 Windows。核心仅用标准库，平台另有依赖：公众号复用 Write 的 `wechat_api.py`，补媒体还需当前 Agent 的浏览器能力。
