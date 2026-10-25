@@ -13,6 +13,7 @@ from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
 import douyin_cover
 import douyin_video
+import douyin_upload
 
 HOME = 'https://creator.douyin.com/creator-micro/home'
 UPLOAD = '/creator-micro/content/upload'
@@ -437,22 +438,36 @@ def dispatch(request_path, action, profile, lock_fd):
             cover_sources = douyin_cover.prepare(page, assets, douyin_cover.requested(pack))
             video = next(x for x in assets if x['kind'] == 'video')
             douyin_video.prepare(video)
+            video_source = douyin_upload.source(video)
             saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
-                         tracking_scope='chrome_session_only', video=None)
+                         tracking_scope='chrome_session_only', video=None, video_source=video_source,
+                         video_upload_events=[], video_upload_errors=[])
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as stream:
                 json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
             assert_identity(page, identity); no_warning(page)
-            video = next(x for x in assets if x['kind'] == 'video')
-            empty_upload(page).set_input_files(checked_path(video), timeout=15000)
-            page.wait_for_function('''() => {
-              const ns=Array.from(document.querySelectorAll('video'));
-              return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
-                && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
-                && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
-            }''', timeout=180000)
-            saved['video'] = video_identity(page)
-            saved['source_video'] = douyin_video.observe(page, video)
+            def upload_receipt(events, errors):
+                checkpoint = dict(saved, video_upload_events=list(events), video_upload_errors=list(errors))
+                write_json(marker, checkpoint)
+                saved.update(checkpoint)
+            capture = douyin_upload.Capture(upload_receipt)
+            page.on('response', capture.response)
+            try:
+                empty_upload(page).set_input_files(checked_path(video), timeout=15000)
+                page.wait_for_function('''() => {
+                  const ns=Array.from(document.querySelectorAll('video'));
+                  return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
+                    && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
+                    && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
+                }''', timeout=180000)
+                saved['video'] = video_identity(page)
+                saved['source_video'] = douyin_video.observe(page, video)
+            finally:
+                page.remove_listener('response', capture.response)
+            if capture.errors:
+                raise PublishError('抖音原生视频提交回执记录失败；保留尝试，不重传')
+            if capture.events:
+                saved['cloud_video'] = douyin_upload.receipt(capture.events, video_source, saved['source_video'])
             saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
             assert_identity(page, identity); no_warning(page)
             title, description = assert_empty_fields(page)
@@ -479,13 +494,15 @@ def dispatch(request_path, action, profile, lock_fd):
             raise PublishError('抖音尚未完成全部字段；只查询，不补填或重传')
         verify_fields(page, pack, saved); assert_identity(page, identity); no_warning(page)
         source_verified = douyin_video.verify(page, pack, saved)
+        cloud_video = douyin_upload.verify(pack, saved, saved.get('source_video'))
         result = {k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')}
         result.update(state='pending' if action == 'execute' else 'prefill_ready',
             remote_id='browser-editor:'+saved['target_id'], remote_url=page.url,
             observed_account_identity=identity, tracking_scope='chrome_session_only',
             platform_draft_saved=False, final_click_available=False,
             source_media_verified=source_verified,
-            source_media_scope='native_editor_preview_bytes' if source_verified else None)
+            source_media_scope='native_editor_preview_bytes' if source_verified else None,
+            native_video_identity_verified=cloud_video is not None)
         if action == 'verify':
             result.update(content_verified=True, verified_pack_digest=digest(pack),
                           verified_asset_ids=[a['id'] for a in pack['assets']])

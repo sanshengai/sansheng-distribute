@@ -7,7 +7,7 @@ import re
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
@@ -67,6 +67,15 @@ class Node:
         self.page.description+=value
     def set_input_files(self,path,**kwargs):
         self.page.uploads.append(Path(path).read_bytes());self.page.url='https://creator.douyin.com'+douyin.EDITOR
+        if self.page.commit_response is not None:
+            data=self.page.uploads[-1]
+            body=dict(ResponseMetadata={},Result=dict(Results=[dict(Vid='vFixtureNative1234567890',VideoMeta=dict(
+                Md5=hashlib.md5(data,usedforsecurity=False).hexdigest(),Size=len(data),Duration=self.page.duration,
+                Width=720,Height=1280,Uri='tos-cn-v-fixture/fixtureObject'))]))
+            if self.page.commit_response=='wrong_md5':body['Result']['Results'][0]['VideoMeta']['Md5']='0'*32
+            response=Mock(url='https://vod.bytedanceapi.com/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=aweme',status=200)
+            response.request.method='POST';response.body.return_value=json.dumps(body).encode()
+            for listener in self.page.listeners:listener(response)
         if self.page.lose_upload:raise RuntimeError('upload outcome lost')
     def locator(self,selector):
         if selector=='xpath=ancestor::*[@role="option"][1]':return self
@@ -115,11 +124,16 @@ class Page:
         self.pending_declaration='';self.options=['A collection'];self.uploads=[];self.fills=0
         self.old_content=False;self.pending_file=False;self.modal=False;self.dropdown=False
         self.local_draft=False;self.local_draft_hint=False
+        self.listeners=[];self.commit_response=None
         self.lose_upload=False;self.lost_identity=False;self.identity_goto_error=False
         self.identity_closed=0;self.identity_opened=0;self.context=self;self.ident='DouyinFixtureTarget'
         self.remount_first_choice=False;self.remount_every_choice=False;self.choice_clicks=0
         self.topics=[];self.topic_options=['知识图解','AI'];self.caret_at_end=True
         self.preview='https://video-cn.douyin.com/sign/expiry/tos-cn-v-fixture/fixtureObject?rotating=1';self.duration=4
+    def on(self,event,listener):
+        if event!='response':raise AssertionError(event)
+        self.listeners.append(listener)
+    def remove_listener(self,event,listener):self.listeners.remove(listener)
     @property
     def pages(self):return [self]
     def new_page(self):self.identity_opened+=1;return Identity(self)
@@ -235,6 +249,44 @@ class DouyinTests(unittest.TestCase):
                 run(self.path,'douyin',self.profile,self.store)
         self.assertFalse(self.page.uploads)
         self.assertFalse(douyin.marker_path(self.request).exists())
+
+    def test_native_commit_is_saved_and_bound_before_prefill_ready(self):
+        self.page.commit_response='valid'
+        result=run(self.path,'douyin',self.profile,self.store)
+        saved=read_json(douyin.marker_path(self.request))
+        self.assertEqual(saved['cloud_video']['vid'],'vFixtureNative1234567890')
+        observation=json.loads(self.store.db.execute('SELECT data FROM events WHERE job_key=? ORDER BY id DESC LIMIT 1',(self.key,)).fetchone()['data'])
+        self.assertTrue(observation['native_video_identity_verified'])
+        self.assertEqual(len(saved['video_upload_events']),1);self.assertEqual(saved['video_upload_errors'],[])
+        self.assertFalse(self.page.listeners)
+        run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+        saved['cloud_video']['vid']='vDifferentNative1234567890';write_json(douyin.marker_path(self.request),saved)
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_native_commit_source_mismatch_stops_before_filling(self):
+        self.page.commit_response='wrong_md5'
+        with self.assertRaisesRegex(PublishError,'VID'):
+            run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(self.page.fills,0);self.assertFalse(self.page.listeners)
+        saved=read_json(douyin.marker_path(self.request))
+        self.assertEqual(len(saved['video_upload_events']),1)
+        self.assertEqual(saved['state'],'attempted')
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_native_commit_persistence_failure_does_not_continue_or_retry(self):
+        self.page.commit_response='valid';real_write=douyin.write_json
+        def save(path,value):
+            if value.get('video_upload_events'):raise OSError('disk unavailable')
+            return real_write(path,value)
+        with patch.object(douyin,'write_json',side_effect=save):
+            with self.assertRaisesRegex(PublishError,'回执记录失败'):
+                run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(self.page.fills,0);self.assertFalse(self.page.listeners)
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
 
     def test_wrong_actual_account_never_uploads(self):
         self.page.uid='wrong_123'
