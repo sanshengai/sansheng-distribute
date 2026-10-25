@@ -293,15 +293,15 @@ class EnvironmentTests(unittest.TestCase):
                 env.initialize(self.home / 'bad.json', platforms=['wechat'], write_scripts=self.home / 'missing')
 
     def test_setup_noninteractive_show_and_repeat_do_not_leak_or_replace(self):
-        command = [sys.executable, str(ROOT / 'setup.py')]
+        path = self.home / 'profile.json'
+        command = [sys.executable, str(ROOT / 'setup.py'), '--profile', str(path),
+                   '--state-dir', str(self.home / 'state')]
         process_env = {k: v for k, v in os.environ.items() if not k.startswith(('SANSHENG_DISTRIBUTE_', 'SANDY_PUBLISH_'))}
-        process_env['HOME'] = str(self.home)
         result = subprocess.run(command, input='', capture_output=True, text=True, env=process_env)
         self.assertEqual(result.returncode, 2)
         self.assertIn('needs_input', result.stdout)
         result = subprocess.run(command + ['--init'], capture_output=True, text=True, env=process_env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        path = self.home / '.config/sansheng-distribute/profile.json'
         before = path.read_bytes()
         result = subprocess.run(command, capture_output=True, text=True, env=process_env)
         self.assertEqual(result.returncode, 0, result.stdout)
