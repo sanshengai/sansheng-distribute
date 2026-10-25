@@ -75,7 +75,7 @@ def native(body):
 class Capture:
     """Only listen to the page's own CommitUploadInner response."""
     def __init__(self, save):
-        self.events = []; self.errors = []; self.save = save
+        self.events = []; self.errors = []; self.diagnostics = []; self.save = save
 
     def response(self, response):
         parts = urlsplit(response.url)
@@ -83,19 +83,46 @@ class Capture:
         if (parts.scheme != 'https' or parts.netloc not in HOSTS
                 or parts.path != '/' or query.get('Action') != ['CommitUploadInner']):
             return
+        phase = 'request'; data = None; shape = None
         try:
             if (query.get('Version') != ['2020-11-19'] or query.get('SpaceName') != ['aweme']
                     or response.request.method != 'POST' or type(response.status) is not int
                     or response.status != 200 or len(self.events) >= 4):
                 raise ValueError()
-            data = response.body()
+            phase = 'body'; data = response.body()
             if not isinstance(data, bytes) or not 0 < len(data) <= 65536:
                 raise ValueError()
-            body = json.loads(data, object_pairs_hook=exact_object)
+            phase = 'json'; body = json.loads(data, object_pairs_hook=exact_object)
+            if isinstance(body, dict):
+                # Names are fixed, values are types only. Never persist tokens,
+                # request headers, raw responses or arbitrary server key names.
+                shape = {k: type(body.get(k)).__name__ for k in ('ResponseMetadata', 'Result')}
+                result = body.get('Result')
+                if isinstance(result, dict):
+                    values = result.get('Results')
+                    shape['Results'] = type(values).__name__
+                    if isinstance(values, list):
+                        shape['result_count'] = len(values)
+                        if values and isinstance(values[0], dict):
+                            meta = values[0].get('VideoMeta')
+                            shape['Vid'] = type(values[0].get('Vid')).__name__
+                            shape['VideoMeta'] = type(meta).__name__
+                            if isinstance(meta, dict):
+                                shape['VideoMeta_fields'] = {k: type(meta.get(k)).__name__ for k in META_FIELDS}
+            phase = 'native_fields'
             event = dict(native(body), observed_at=time.time())
             self.events.append(event)
+            phase = 'save'
             self.save(self.events, self.errors)
-        except Exception:
+        except Exception as exc:
+            self.diagnostics.append(dict(phase=phase, error_type=type(exc).__name__,
+                response_status=response.status if type(response.status) is int else None,
+                version=query['Version'][0] if len(query.get('Version', [])) == 1
+                    and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', query['Version'][0]) else 'unrecognized',
+                space_is_aweme=query.get('SpaceName') == ['aweme'],
+                body_bytes=len(data) if isinstance(data, bytes) else None,
+                body_sha256=hashlib.sha256(data).hexdigest() if isinstance(data, bytes) else None,
+                field_types=shape))
             self.errors.append('native_video_commit_unrecorded')
             try: self.save(self.events, self.errors)
             except Exception: pass

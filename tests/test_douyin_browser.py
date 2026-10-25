@@ -203,6 +203,77 @@ class DouyinTests(unittest.TestCase):
     @property
     def request(self):return self.store.directory/'requests'/f'{self.key}.json'
 
+    def owned_editor(self):
+        self.profile['browser_runtime']['owned_prefill_window'] = True
+        write_json(self.profile_path, self.profile)
+        owned = Page(); owned.ident = 'OwnedDouyinFixture'; owned.commit_response = 'ok'
+        owned.close = Mock(); owned.goto = Mock()
+        def goto(url, **kwargs):
+            saved = read_json(douyin.marker_path(self.request))
+            self.assertEqual(saved['target_id'], owned.ident)
+            self.assertEqual(saved['state'], 'owned_window_opened')
+            self.assertEqual(saved['phase'], 'before_navigation')
+            owned.url = url
+        owned.goto.side_effect = goto
+        @contextlib.contextmanager
+        def window(anchor, **kwargs):
+            self.assertIs(anchor, self.page)
+            self.assertEqual(kwargs, dict(cdp_url='http://127.0.0.1:9333', retain=True))
+            yield owned
+        patch.object(douyin, 'background_window', side_effect=window).start()
+        def selected(connection, platform, **kwargs):
+            self.assertEqual(platform, 'douyin')
+            self.assertEqual(kwargs, dict(target_id=owned.ident))
+            return owned
+        patch.object(douyin, 'select_page', side_effect=selected).start()
+        return owned
+
+    def test_owned_prefill_preserves_existing_editor_and_resumes_same_new_target(self):
+        self.page.old_content = True; self.page.description = '作者已有稿，不得改动'
+        owned = self.owned_editor()
+        result = run(self.path, 'douyin', self.profile, self.store)
+        self.assertEqual(result['state'], 'prefill_ready')
+        saved = read_json(douyin.marker_path(self.request))
+        self.assertTrue(saved['owned_window']); self.assertEqual(saved['target_id'], owned.ident)
+        self.assertEqual(owned.uploads, [b'local sealed fixture'])
+        self.assertFalse(self.page.uploads); self.assertEqual(self.page.fills, 0)
+        self.assertEqual(self.page.description, '作者已有稿，不得改动')
+        run(self.path, 'douyin', self.profile, self.store, resume=True)
+        self.assertEqual(len(owned.uploads), 1); owned.goto.assert_called_once(); owned.close.assert_not_called()
+
+    def test_owned_window_record_failure_closes_only_empty_new_window(self):
+        owned = self.owned_editor()
+        with patch.object(douyin, 'record_first_attempt', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):run(self.path, 'douyin', self.profile, self.store)
+        owned.close.assert_called_once(); owned.goto.assert_not_called()
+        self.assertFalse(owned.uploads); self.assertFalse(self.page.uploads)
+        self.assertFalse(self.request.with_suffix('.browser-assets').exists())
+
+    def test_owned_window_never_discards_native_local_draft_to_upload(self):
+        owned = self.owned_editor(); owned.local_draft = True
+        with self.assertRaisesRegex(PublishError, '本地暂存'):
+            run(self.path, 'douyin', self.profile, self.store)
+        self.assertFalse(owned.uploads); self.assertFalse(self.page.uploads)
+        saved = read_json(douyin.marker_path(self.request))
+        self.assertEqual(saved['state'], 'owned_window_opened'); owned.close.assert_not_called()
+        with self.assertRaisesRegex(PublishError, '尚未完成全部字段'):
+            run(self.path, 'douyin', self.profile, self.store, resume=True)
+        owned.goto.assert_called_once(); self.assertFalse(owned.uploads)
+
+    def test_owned_prefill_config_and_context_fail_before_window_creation(self):
+        with patch.object(douyin, 'connect') as connection:
+            for value in ['true', 1, None]:
+                self.profile['browser_runtime']['owned_prefill_window'] = value
+                with self.assertRaisesRegex(PublishError, '布尔'):
+                    douyin.settings(self.profile, self.manifest['targets'][0])
+            connection.assert_not_called()
+        with patch.object(douyin, 'background_window') as window:
+            for contexts in [[], [Mock(), Mock()], [Mock(pages=[])]]:
+                with self.assertRaises(PublishError):
+                    douyin.editor_scope(Mock(contexts=contexts), endpoint='http://127.0.0.1:9333',
+                                        owned=True, action='execute', saved=None)
+            window.assert_not_called()
+
     def test_complete_native_prefill_and_independent_resume_no_reupload(self):
         result=run(self.path,'douyin',self.profile,self.store)
         self.assertEqual(result['state'],'prefill_ready');self.assertEqual(self.page.uploads,[b'local sealed fixture'])

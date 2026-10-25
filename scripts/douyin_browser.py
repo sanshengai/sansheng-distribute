@@ -1,5 +1,6 @@
 """Bounded native Douyin video prefill. No submit, save-draft or retry upload."""
 from __future__ import annotations
+import contextlib
 import json
 import math
 import os
@@ -8,7 +9,7 @@ import re
 from urllib.parse import urlsplit
 
 from browser_assets import checked_path, stage
-from browser_runtime import background_tab, browser_config, connect, select_page
+from browser_runtime import background_tab, background_window, browser_config, connect, select_page
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
 import douyin_cover
@@ -98,6 +99,8 @@ def settings(profile, target):
             or not isinstance(identity, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{3,64}', identity)):
         raise PublishError('抖音须绑定实际抖音号，不能使用昵称或本地别名')
     endpoint, browser = browser_config(profile)
+    if type(profile.get('browser_runtime', {}).get('owned_prefill_window', False)) is not bool:
+        raise PublishError('owned_prefill_window 须为布尔值')
     return identity, endpoint, browser
 
 
@@ -417,7 +420,8 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     video=next(x for x in assets if x['kind']=='video')
     video_source=saved['video_source']
     def upload_receipt(events, errors):
-        checkpoint = dict(saved, video_upload_events=list(events), video_upload_errors=list(errors))
+        checkpoint = dict(saved, video_upload_events=list(events), video_upload_errors=list(errors),
+                          video_upload_diagnostics=list(capture.diagnostics))
         write_json(marker, checkpoint)
         saved.update(checkpoint)
     capture = douyin_upload.Capture(upload_receipt)
@@ -466,6 +470,25 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     saved['state'] = 'filled'; saved['phase'] = 'complete'; write_json(marker, saved)
 
 
+def editor_scope(connection, *, endpoint, owned, action, saved):
+    if action == 'verify':
+        return contextlib.nullcontext(select_page(connection, 'douyin', target_id=saved['target_id']))
+    if not owned:
+        return contextlib.nullcontext(select_page(connection, 'douyin'))
+    # This page is only a CDP transport anchor in the already verified profile.
+    # It is never navigated or treated as evidence of the target account.
+    contexts = connection.contexts
+    if len(contexts) != 1 or not contexts[0].pages:
+        raise PublishError('不能唯一确定专用浏览器上下文；不创建编辑窗口')
+    return background_window(contexts[0].pages[0], cdp_url=endpoint, retain=True)
+
+
+def record_first_attempt(marker, saved):
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
+
+
 def dispatch(request_path, action, profile, lock_fd):
     if action not in {'execute', 'verify'}: raise PublishError('不支持的抖音阶段')
     try: os.fstat(lock_fd)
@@ -489,38 +512,53 @@ def dispatch(request_path, action, profile, lock_fd):
     # Even verification opens an owned read-only identity tab; serialize its UI
     # lifecycle with all other operations sharing this dedicated Chrome profile.
     with connect(profile, writing=True) as connection:
-        page = select_page(connection, 'douyin', target_id=saved['target_id'] if action == 'verify' else None)
-        assert_identity(page, identity); no_warning(page)
-        if action == 'execute':
-            empty_upload(page)
-            douyin_video.prepare(next(x for x in pack['assets'] if x['kind'] == 'video'))
-            assets = stage(pack, request_path)
-            cover_sources = douyin_cover.prepare(page, assets, douyin_cover.requested(pack))
-            video = next(x for x in assets if x['kind'] == 'video')
-            douyin_video.prepare(video)
-            video_source = douyin_upload.source(video)
-            saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
-                         tracking_scope='chrome_session_only', video=None, video_source=video_source,
-                         video_upload_events=[], video_upload_errors=[])
-            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w') as stream:
-                json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
+        owned = profile.get('browser_runtime', {}).get('owned_prefill_window', False)
+        with editor_scope(connection, endpoint=endpoint, owned=owned, action=action,
+                          saved=saved if action == 'verify' else None) as page:
+            if action == 'execute' and owned:
+                saved = dict(bound, target_id=target_id(page), state='owned_window_opened',
+                             phase='before_navigation', tracking_scope='chrome_session_only',
+                             owned_window=True, video=None)
+                try:
+                    record_first_attempt(marker, saved)
+                except Exception:
+                    page.close()  # Nothing has been navigated, selected or uploaded yet.
+                    raise
+                page.goto('https://creator.douyin.com'+UPLOAD, wait_until='domcontentloaded', timeout=25000)
+                page.locator('input[type="file"]').wait_for(state='attached', timeout=15000)
             assert_identity(page, identity); no_warning(page)
-            fill_new(page, pack, assets, cover_sources, identity, saved, marker)
-        if saved.get('state') not in {'uploaded', 'filled'} or not saved.get('video'):
-            raise PublishError('抖音尚未完成全部字段；只查询，不补填或重传')
-        verify_fields(page, pack, saved); assert_identity(page, identity); no_warning(page)
-        source_verified = douyin_video.verify(page, pack, saved)
-        cloud_video = douyin_upload.verify(pack, saved, saved.get('source_video'))
-        result = {k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')}
-        result.update(state='pending' if action == 'execute' else 'prefill_ready',
-            remote_id='browser-editor:'+saved['target_id'], remote_url=page.url,
-            observed_account_identity=identity, tracking_scope='chrome_session_only',
-            platform_draft_saved=False, final_click_available=False,
-            source_media_verified=source_verified,
-            source_media_scope='native_editor_preview_bytes' if source_verified else None,
-            native_video_identity_verified=cloud_video is not None)
-        if action == 'verify':
-            result.update(content_verified=True, verified_pack_digest=digest(pack),
-                          verified_asset_ids=[a['id'] for a in pack['assets']])
-        return result
+            if action == 'execute':
+                empty_upload(page)
+                douyin_video.prepare(next(x for x in pack['assets'] if x['kind'] == 'video'))
+                assets = stage(pack, request_path)
+                cover_sources = douyin_cover.prepare(page, assets, douyin_cover.requested(pack))
+                video = next(x for x in assets if x['kind'] == 'video')
+                douyin_video.prepare(video)
+                video_source = douyin_upload.source(video)
+                saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
+                             tracking_scope='chrome_session_only', video=None, video_source=video_source,
+                             video_upload_events=[], video_upload_errors=[])
+                if owned:
+                    saved['owned_window'] = True
+                    write_json(marker, saved)
+                else:
+                    record_first_attempt(marker, saved)
+                assert_identity(page, identity); no_warning(page)
+                fill_new(page, pack, assets, cover_sources, identity, saved, marker)
+            if saved.get('state') not in {'uploaded', 'filled'} or not saved.get('video'):
+                raise PublishError('抖音尚未完成全部字段；只查询，不补填或重传')
+            verify_fields(page, pack, saved); assert_identity(page, identity); no_warning(page)
+            source_verified = douyin_video.verify(page, pack, saved)
+            cloud_video = douyin_upload.verify(pack, saved, saved.get('source_video'))
+            result = {k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')}
+            result.update(state='pending' if action == 'execute' else 'prefill_ready',
+                remote_id='browser-editor:'+saved['target_id'], remote_url=page.url,
+                observed_account_identity=identity, tracking_scope='chrome_session_only',
+                platform_draft_saved=False, final_click_available=False,
+                source_media_verified=source_verified,
+                source_media_scope='native_editor_preview_bytes' if source_verified else None,
+                native_video_identity_verified=cloud_video is not None)
+            if action == 'verify':
+                result.update(content_verified=True, verified_pack_digest=digest(pack),
+                              verified_asset_ids=[a['id'] for a in pack['assets']])
+            return result

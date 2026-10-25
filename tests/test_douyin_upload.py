@@ -105,6 +105,49 @@ class UploadTests(unittest.TestCase):
         r=response(body);r.body.return_value=b'{"ResponseMetadata":{},"ResponseMetadata":{},"Result":{}}'
         c=upload.Capture(lambda *args:None);c.response(r);self.assertTrue(c.errors)
 
+    def test_failed_receipt_diagnostic_records_types_without_response_values(self):
+        _,_,body,_=sample()
+        body['Result']['Results'][0]['VideoMeta']['Size']='private-size-value'
+        body['private-key']='secret-token';body['ResponseMetadata']['RequestId']='private-request-id'
+        observed=[]
+        c=upload.Capture(lambda *args:observed.append(copy.deepcopy(c.diagnostics)))
+        r=response(body);c.response(r)
+        self.assertFalse(c.events);self.assertEqual(c.errors,['native_video_commit_unrecorded'])
+        self.assertEqual(len(observed),1);self.assertEqual(observed[0],c.diagnostics)
+        d=c.diagnostics[0]
+        self.assertEqual(d['phase'],'native_fields')
+        self.assertEqual(d['field_types']['VideoMeta_fields']['Size'],'str')
+        self.assertEqual(d['body_sha256'],hashlib.sha256(r.body.return_value).hexdigest())
+        self.assertEqual(d['body_bytes'],len(r.body.return_value))
+        for secret in ['private-size-value','private-key','secret-token','private-request-id',URI]:
+            self.assertNotIn(secret,json.dumps(c.diagnostics))
+
+    def test_body_json_and_save_failures_are_distinguishable_and_sticky(self):
+        _,_,body,_=sample()
+        for phase in ['body','json','save']:
+            with self.subTest(phase=phase):
+                r=response(body)
+                if phase=='body':r.body.side_effect=RuntimeError('signed secret URL')
+                if phase=='json':r.body.return_value=b'not-json secret-token'
+                def save(*args):
+                    if phase=='save':raise OSError('private path')
+                c=upload.Capture(save);c.response(r)
+                self.assertEqual(c.diagnostics[0]['phase'],phase)
+                self.assertEqual(c.errors,['native_video_commit_unrecorded'])
+                if phase=='body':self.assertIsNone(c.diagnostics[0]['body_sha256'])
+                for secret in ['signed secret URL','secret-token','private path']:
+                    self.assertNotIn(secret,json.dumps(c.diagnostics))
+
+    def test_unsupported_request_diagnostics_never_record_arbitrary_query_values(self):
+        _,_,body,_=sample();c=upload.Capture(lambda *args:None)
+        c.response(response(body,url='https://vod.bytedanceapi.com/?Action=CommitUploadInner&Version=secret-version&SpaceName=secret-space'))
+        self.assertFalse(c.events);self.assertEqual(c.errors,['native_video_commit_unrecorded'])
+        self.assertEqual(c.diagnostics[0]['phase'],'request')
+        self.assertEqual(c.diagnostics[0]['version'],'unrecognized')
+        self.assertFalse(c.diagnostics[0]['space_is_aweme'])
+        self.assertIsNone(c.diagnostics[0]['body_sha256'])
+        self.assertNotIn('secret-',json.dumps(c.diagnostics))
+
     def test_saved_cloud_receipt_requires_original_events_and_same_source(self):
         local,preview,_,event=sample();asset=dict(id='video',kind='video',sha256='a'*64)
         pack=dict(assets=[asset]);saved=dict(video_source=local,video_upload_events=[event],
