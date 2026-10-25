@@ -11,6 +11,7 @@ from browser_assets import checked_path, stage
 from browser_runtime import background_tab, browser_config, connect, select_page
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
+import douyin_cover
 
 HOME = 'https://creator.douyin.com/creator-micro/home'
 UPLOAD = '/creator-micro/content/upload'
@@ -113,17 +114,19 @@ def check_pack(pack):
     if pack['platform'] != 'douyin' or pack['endpoint'] != 'prefill' or pack['content_type'] != 'video':
         raise PublishError('当前抖音包内路线仅 video:prefill；不保存或公开发送')
     fields, metadata = pack['fields'], pack['platform_metadata']
-    if pack['document'] or pack['cover_asset_id'] or pack['subtitle_asset_ids']:
-        raise PublishError('抖音文章、指定封面和字幕尚未接入；不静默省略')
+    if pack['document'] or pack['subtitle_asset_ids']:
+        raise PublishError('抖音文章和字幕尚未接入；不静默省略')
     topic_names(pack)
-    if (len(pack['assets']) != 1 or pack['assets'][0]['kind'] != 'video'
-            or Path(pack['assets'][0]['path']).suffix.lower() != '.mp4'):
-        raise PublishError('当前抖音路线须且仅须一个 MP4；其他素材不能丢弃')
+    covers = douyin_cover.requested(pack)
+    videos = [x for x in pack['assets'] if x['kind'] == 'video']
+    if (len(videos) != 1 or Path(videos[0]['path']).suffix.lower() != '.mp4'
+            or {x['id'] for x in pack['assets'] if x['kind'] != 'video'} != set(covers.values())):
+        raise PublishError('当前抖音路线须唯一 MP4 和明确指定的封面；其他素材不能丢弃')
     if (not fields['title'].strip() or len(fields['title']) > 30
             or len(topic_document(pack)['text']) > 1000
             or (fields['text'] and fields['description'] and fields['text'] != fields['description'])):
         raise PublishError('抖音标题/简介不符合当前已核对字段；不截断或丢弃第二套描述')
-    if set(metadata) - {'ai_generated', 'declaration', 'collection_name'}:
+    if set(metadata) - {'ai_generated', 'declaration', 'collection_name', 'cover_assets'}:
         raise PublishError('抖音尚未映射合集ID、定时或其他扩展字段；不忽略')
     if 'collection_name' in metadata and (not isinstance(metadata['collection_name'], str)
             or not metadata['collection_name'].strip()):
@@ -383,6 +386,7 @@ def verify_fields(page, pack, saved):
     actual = native_document(description)
     if title.input_value() != pack['fields']['title'] or actual != expected:
         raise PublishError('抖音标题或简介已改变；不报告预填完成')
+    douyin_cover.verify(page, pack, saved)
     if video_identity(page) != saved.get('video'):
         raise PublishError('抖音视频预览身份已改变；不重新上传')
     metadata = pack['platform_metadata']
@@ -425,13 +429,15 @@ def dispatch(request_path, action, profile, lock_fd):
         if action == 'execute':
             empty_upload(page)
             assets = stage(pack, request_path)
+            cover_sources = douyin_cover.prepare(page, assets, douyin_cover.requested(pack))
             saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
                          tracking_scope='chrome_session_only', video=None)
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as stream:
                 json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
             assert_identity(page, identity); no_warning(page)
-            empty_upload(page).set_input_files(checked_path(assets[0]), timeout=15000)
+            video = next(x for x in assets if x['kind'] == 'video')
+            empty_upload(page).set_input_files(checked_path(video), timeout=15000)
             page.wait_for_function('''() => {
               const ns=Array.from(document.querySelectorAll('video'));
               return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
@@ -454,6 +460,9 @@ def dispatch(request_path, action, profile, lock_fd):
             if pack['platform_metadata'].get('collection_name'):
                 saved['phase'] = 'collection'; write_json(marker, saved)
                 select_collection(page, pack['platform_metadata']['collection_name'])
+            def cover_receipt(role, value):
+                saved.setdefault('covers', {})[role] = value; write_json(marker, saved)
+            douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
             saved['phase'] = 'readback'; write_json(marker, saved)
             verify_fields(page, pack, saved)
             saved['state'] = 'filled'; saved['phase'] = 'complete'; write_json(marker, saved)

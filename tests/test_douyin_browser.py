@@ -376,5 +376,27 @@ class DouyinTests(unittest.TestCase):
             with self.assertRaises(PublishError):douyin.check_pack(build_pack(changed,'douyin',self.profile))
         self.assertEqual(self.page.uploads,[]);self.assertEqual(self.page.identity_opened,0)
 
+    def test_unmapped_cover_asset_never_dropped(self):
+        from platform_pack import build_pack
+        (self.root/'cover.png').write_bytes(b'fixture image')
+        self.manifest['assets'].append(dict(id='cover',kind='image',path='cover.png'))
+        self.manifest['targets'][0]['asset_ids'].append('cover')
+        validate(self.manifest,sealing=True)
+        with self.assertRaisesRegex(PublishError,'其他素材不能丢弃'):
+            douyin.check_pack(build_pack(self.manifest,'douyin',self.profile))
+        self.assertEqual(self.page.uploads,[]);self.assertEqual(self.page.identity_opened,0)
+
+    def test_cover_decode_failure_is_before_video_upload(self):
+        (self.root/'cover.png').write_bytes(b'fixture image')
+        self.manifest['assets'].insert(0,dict(id='cover',kind='image',path='cover.png'))
+        self.manifest['targets'][0]['asset_ids'].insert(0,'cover')
+        self.manifest['targets'][0]['cover_asset_id']='cover'
+        validate(self.manifest,sealing=True);write_json(self.path,self.manifest)
+        self.key=self.store.prepare(self.manifest,'douyin')['key']
+        self.store.authorize(self.manifest,'douyin','test cover decode failure')
+        with patch.object(douyin.douyin_cover,'encode',side_effect=PublishError('invalid cover ratio')):
+            with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(self.page.uploads,[])
+
 
 if __name__=='__main__':unittest.main()
