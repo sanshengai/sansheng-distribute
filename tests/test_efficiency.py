@@ -181,6 +181,19 @@ class BiliBridgeTests(unittest.TestCase):
             pack = copy.deepcopy(self.pack); pack['fields'][field] = value
             with self.assertRaises(PublishError): plan(pack, '/tool', '/cookies', 171)
 
+    def test_ai_declaration_is_explicit_and_preserved(self):
+        pack = copy.deepcopy(self.pack)
+        pack['platform_metadata']['ai_generated'] = True
+        with patch('biliup_bridge.probe', return_value={'binary': '/private/biliup'}):
+            argv = plan(pack, '/tool', '/cookies', 229)['argv']
+        self.assertEqual(json.loads(argv[argv.index('--extra-fields') + 1]),
+                         {'creation_statement': {'id': 1}})
+        for invalid in ('true', 1, None):
+            pack['platform_metadata']['ai_generated'] = invalid
+            with patch('biliup_bridge.probe') as runtime, self.assertRaises(PublishError):
+                plan(pack, '/tool', '/cookies', 229)
+            runtime.assert_not_called()
+
     def test_tampered_binary_not_executed(self):
         import hashlib
         with tempfile.TemporaryDirectory() as temporary:

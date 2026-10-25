@@ -5,7 +5,7 @@
 | 平台 | 本轮采用 | 执行边界 |
 |---|---|---|
 | X | 免费浏览器流程 | 不为本流程开通付费 API；复用现有可选宝玉预填桥或宿主浏览器工具 |
-| B 站 | 浏览器继续承担正式投稿；可选 biliup CLI 试验 | CLI 能安装、核对完整性、扫码登录及生成投稿参数；本桥尚不执行上传 |
+| B 站 | 浏览器保持可用；biliup CLI 已完成单次真实受理试验 | 已实测上传、封面、文案和 AI 声明；逐稿保留核心授权、锁与独立读回，尚未自动注册通用上传适配器 |
 | 抖音 | 创作者网页 | 政务代投稿接口不视为普通个人接口；不伪造机构资质 |
 | 微信视频号 | 视频号助手网页 | 与公众号、腾讯视频分别处理；读取真实合集、话题和声明字段 |
 | 小红书 | 解限后只预填，作者最终点击 | 受限账号仅交付本地发布包，不启动自动化；不用人手点一次推断可以避免风控 |
@@ -83,9 +83,20 @@ python3 scripts/biliup_bridge.py identity --directory /private/tools/biliup-1.3.
 python3 scripts/biliup_bridge.py plan --directory /private/tools/biliup-1.3.4 --credentials /private/auth/bilibili.json --manifest /private/manifest.json --target bili --profile /private/profile.json --tid 171
 ```
 
-`tid` 必须实查，示例不是默认推荐分区。试验计划只接受显式声明 `platform_metadata.copyright=1` 的单视频自制投稿及可选封面。字幕、合集、AI 声明、活动、额外正文、独立 links 等尚未覆盖时拒绝生成，保持浏览器路线。不要为通过计划检查删除真实 AI 声明。这里没有 `upload` 命令；不能把生成参数等同于已经打通投稿。
+`tid` 必须实查，示例不是默认推荐分区。试验计划只接受显式声明 `platform_metadata.copyright=1` 的单视频自制投稿及可选封面。可选 `platform_metadata.ai_generated` 必须为布尔值；true 时通过 `--extra-fields` 传入 `creation_statement: {"id": 1}`。字幕、合集、活动、额外正文、独立 links 等尚未覆盖时拒绝生成，保持浏览器路线。不要为通过计划检查删除真实 AI 声明。本桥仍只规划参数；真实试验应由核心运行时内的受限适配器执行，不在锁外直接照抄命令。
 
 启用真实 CLI 上传前，须用新的、已授权的内容完成：登录 UID 核对、实际字段等价性、AI 标识适用性、进入核心授权/锁/未知恢复、保存真实稿件 ID、独立作品页读回及失败反例。不能拿历史已发布内容重复投稿试验。
+
+### 真实试验所得（2026-10-25）
+
+已用一条新的、明确授权的视频走固定版 CLI `--submit web`：上传和投稿接口均成功，独立后台读回确认标题、简介、标签、封面和 `creation_statement.id=1`，当时进入复核。该证据证明可真实受理，不代表所有账号、合集、活动及公开播放均已验收。账号、稿件 ID、文件路径与具体证据仅留私有任务账本。
+
+- 从 code=0 的投稿响应先保存 `aid/bvid`，随后按 ID 查询 `/x/vupre/web/archive/view?aid=...`。新稿可能尚未出现在作品列表中；列表未命中不等于失败，不重传。CLI exit=0 同样不能代替保存响应身份。
+- “审核中”“复核中”保持 `pending`，只有后台开放与独立公开作品读回相符才登记 `published`。公开查询 HTTP 错误仅说明该次查询不可用，保留已受理身份并只读恢复。
+- 核对封面实际内容：首帧可能是空白底或 AI 提示，抽取有品牌和集号的正式画面，不盲目使用第0帧。
+- 执行 CLI 子进程仍继承核心账号锁；单次授权范围不扩大到其他集，原始 CLI 输出留私有目录并设0600，日志可能含上传签名地址，不提交公开仓。
+
+字段实现依据：[biliup 固定版源码](https://github.com/biliup/biliup/tree/v1.3.4)；[self-media-uper 的 B站实现](https://github.com/lzy198436/self-media-uper/blob/main/smu/platforms/bilibili.py)仅交叉核对字段设计，未复制其代码。网页协议依然可能变化，逐次独立读回实际声明。
 
 ## 小红书 MCP 审计结论
 

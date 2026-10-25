@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pinned optional biliup installer/probe/login and lossless upload planning.
 
-Upload is not enabled here: AI declarations, subtitles and post-submit readback
-must be covered before a real CLI publication can join the dispatch ledger.
+This module plans commands only. Real trials must retain the dispatch ledger,
+account lock and independent readback; a CLI exit code is not publication proof.
 """
 from __future__ import annotations
 
@@ -129,10 +129,12 @@ def plan(pack, directory, credentials, tid):
     if type(tid) is not int or tid <= 0:
         raise PublishError('分区 tid 必须来自实际分区查询')
     metadata = pack.get('platform_metadata', {})
-    if set(metadata) - {'copyright'} or pack.get('subtitle_asset_ids'):
+    if set(metadata) - {'copyright', 'ai_generated'} or pack.get('subtitle_asset_ids'):
         raise PublishError('当前 CLI 桥未覆盖平台扩展字段或字幕；保留浏览器路线，不静默丢字段')
     if metadata.get('copyright') != 1:
         raise PublishError('试验计划须显式确认 platform_metadata.copyright=1 的自制权利；不自动认定原创')
+    if 'ai_generated' in metadata and type(metadata['ai_generated']) is not bool:
+        raise PublishError('ai_generated 必须为布尔值；不能把未知声明当作未使用 AI')
     assets = pack.get('assets', [])
     videos = [a for a in assets if a['kind'] == 'video']
     cover = pack.get('cover_asset_id')
@@ -151,6 +153,8 @@ def plan(pack, directory, credentials, tid):
     args = [binary, '-u', str(Path(credentials).expanduser().resolve()), 'upload',
             '--submit', 'web', '--limit', '1', '--copyright', '1', '--tid', str(tid),
             '--title', title, '--desc', fields.get('description', ''), '--tag', ','.join(tags)]
+    if metadata.get('ai_generated') is True:
+        args += ['--extra-fields', json.dumps({'creation_statement': {'id': 1}})]
     if cover:
         images = [a for a in assets if a['id'] == cover and a['kind'] == 'image']
         if len(images) != 1:
@@ -158,7 +162,7 @@ def plan(pack, directory, credentials, tid):
         args += ['--cover', images[0]['absolute_path']]
     args += ['--', videos[0]['absolute_path']]
     return {'argv': args, 'executable_plan_only': True, 'upload_enabled': False,
-            'unverified': ['登录账号 UID', 'AI声明适用性', '首次真实投稿', '独立作品页读回']}
+            'unverified': ['本次登录账号 UID', '本次真实投稿及AI声明读回', '独立作品页读回']}
 
 
 def main():
