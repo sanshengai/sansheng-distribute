@@ -14,6 +14,7 @@ from publish_core import PublishError, digest, read_json, write_json
 import douyin_cover
 import douyin_video
 import douyin_upload
+import douyin_schedule
 
 HOME = 'https://creator.douyin.com/creator-micro/home'
 UPLOAD = '/creator-micro/content/upload'
@@ -128,8 +129,11 @@ def check_pack(pack, *, publishing=False):
             or len(topic_document(pack)['text']) > 1000
             or (fields['text'] and fields['description'] and fields['text'] != fields['description'])):
         raise PublishError('抖音标题/简介不符合当前已核对字段；不截断或丢弃第二套描述')
-    if set(metadata) - {'ai_generated', 'declaration', 'collection_name', 'cover_assets'}:
-        raise PublishError('抖音尚未映射合集ID、定时或其他扩展字段；不忽略')
+    if set(metadata) - {'ai_generated', 'declaration', 'collection_name', 'cover_assets', 'publish_at'}:
+        raise PublishError('抖音尚未映射合集ID、活动或其他扩展字段；不忽略')
+    douyin_schedule.requested(metadata)
+    if publishing and 'publish_at' in metadata:
+        raise PublishError('抖音定时发送及其独立读回尚未验收；仅支持显式预填，不转为立即发布')
     if 'collection_name' in metadata and (not isinstance(metadata['collection_name'], str)
             or not metadata['collection_name'].strip()):
         raise PublishError('指定合集名称必须为非空字符串')
@@ -400,6 +404,7 @@ def verify_fields(page, pack, saved):
     selected = collection_value(page)
     if selected != metadata.get('collection_name', '请选择合集'):
         raise PublishError('抖音合集与交接包不符')
+    douyin_schedule.verify(page, metadata, saved.get('schedule'))
 
 
 def marker_path(request_path):
@@ -408,6 +413,7 @@ def marker_path(request_path):
 
 def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     """One native upload plus fields; caller must persist its owned attempt first."""
+    douyin_schedule.require_future(douyin_schedule.requested(pack['platform_metadata']))
     video=next(x for x in assets if x['kind']=='video')
     video_source=saved['video_source']
     def upload_receipt(events, errors):
@@ -451,6 +457,10 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     def cover_receipt(role, value):
         saved.setdefault('covers', {})[role] = value; write_json(marker, saved)
     douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
+    if 'publish_at' in pack['platform_metadata']:
+        saved['phase'] = 'schedule'; write_json(marker, saved)
+        saved['schedule'] = douyin_schedule.fill(page, pack['platform_metadata'])
+        write_json(marker, saved)
     saved['phase'] = 'readback'; write_json(marker, saved)
     verify_fields(page, pack, saved)
     saved['state'] = 'filled'; saved['phase'] = 'complete'; write_json(marker, saved)

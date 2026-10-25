@@ -223,6 +223,42 @@
         }
       ],
       "adoption": "Read already-loaded native SDK source: upload.json/upload2.json, INIT/APPEND/APPENDMULTI/FINALIZE/STATUS, multipart media, segment indexes/checksum, INIT media identity and native processing. Independently implemented passive chunk-to-sealed-source verification; no SDK code vendored, no private request constructed/replayed. New photo upload and publication remain unverified in live platform."
+    },
+    {
+      "platform": "douyin_schedule",
+      "reviewed_at": "2026-10-26",
+      "creator_url": "https://creator.douyin.com/creator-micro/content/post/video",
+      "assets": [
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/douyin_content_index_micro_new.a59e122d.js",
+          "sha256": "861762ec0c6c1a56f626fb56d71be4654ad747114ee9aaea18a7d30159ac5786",
+          "modules": [
+            "23934"
+          ]
+        },
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/async/1025.94b3a8d9.js",
+          "sha256": "2f935b41c134f355ec1a747f003f6dfb6ac0cf1ccc09cac8788677f0f2c48693",
+          "modules": [
+            "69066"
+          ]
+        },
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/async/2699.5f441ead.js",
+          "sha256": "ba9261aaf5bfe14b6a3c5ad4c8e351c2a1bbd69998b36bcfbe3701c1e3d05d63",
+          "modules": [
+            "76620"
+          ]
+        },
+        {
+          "url": "https://lf-fe-creator.douyinstatic.com/obj/douyn-creator-scm-cdn/douyin-creator-content-new/micro/static/js/async/7290.d197a4f8.js",
+          "sha256": "60db08ff28a642789de9e1dc564e04e6a08d9a9e5d111c983b0580e791b5e028",
+          "modules": [
+            "62995"
+          ]
+        }
+      ],
+      "adoption": "Read already-loaded native scheduling component, account-version bounds and beforePost timing serialization. Native bounds vary by account; scheduled timestamp is serialized as UNIX seconds, immediate uses zero. Independently implemented optional visible-editor prefill and read-only verification; no frontend source copied and no private request constructed or replayed. Live scheduled prefill, submission, native acceptance and independent scheduled-post readback remain unverified; scheduled publishing is rejected."
     }
   ]
 }

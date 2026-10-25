@@ -437,6 +437,24 @@ class DouyinTests(unittest.TestCase):
             with self.assertRaises(PublishError):douyin.check_pack(build_pack(modified,'douyin',self.profile))
         self.assertEqual(self.page.uploads,[])
 
+    def test_optional_schedule_pack_preserved_and_public_send_rejected(self):
+        from platform_pack import build_pack
+        modified=copy.deepcopy(self.manifest)
+        target=modified['targets'][0]
+        target['platform_metadata']['publish_at']='2070-10-30T18:30:00+08:00'
+        pack=build_pack(modified,'douyin',self.profile)
+        douyin.check_pack(pack)
+        self.assertEqual(pack['platform_metadata']['publish_at'],target['platform_metadata']['publish_at'])
+        target['endpoint']='publish'
+        with self.assertRaisesRegex(PublishError,'定时发送'):
+            douyin.check_pack(build_pack(modified,'douyin',self.profile),publishing=True)
+
+    def test_expired_schedule_stops_production_fill_before_upload(self):
+        with patch.object(douyin,'empty_upload',side_effect=AssertionError('must stop before upload')) as upload:
+            with self.assertRaisesRegex(PublishError,'已过'):
+                douyin.fill_new(self.page,{'platform_metadata':{'publish_at':'2000-01-01T00:00:00Z'}},[],{},'',{},self.request)
+            upload.assert_not_called()
+
     def with_topics(self, names=('知识图解','AI')):
         self.manifest['targets'][0]['tags']=list(names)
         validate(self.manifest,sealing=True);write_json(self.path,self.manifest)
