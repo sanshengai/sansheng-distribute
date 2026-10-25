@@ -112,9 +112,9 @@ def declaration(metadata):
     return label
 
 
-def check_pack(pack):
-    if pack['platform'] != 'douyin' or pack['endpoint'] != 'prefill' or pack['content_type'] != 'video':
-        raise PublishError('当前抖音包内路线仅 video:prefill；不保存或公开发送')
+def check_pack(pack, *, publishing=False):
+    if pack['platform'] != 'douyin' or pack['endpoint'] != ('publish' if publishing else 'prefill') or pack['content_type'] != 'video':
+        raise PublishError('抖音路线须明确 video:prefill 或显式发送候选；不升级终点')
     fields, metadata = pack['fields'], pack['platform_metadata']
     if pack['document'] or pack['subtitle_asset_ids']:
         raise PublishError('抖音文章和字幕尚未接入；不静默省略')
@@ -406,6 +406,56 @@ def marker_path(request_path):
     return Path(request_path).with_suffix('.browser-attempt.json')
 
 
+def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
+    """One native upload plus fields; caller must persist its owned attempt first."""
+    video=next(x for x in assets if x['kind']=='video')
+    video_source=saved['video_source']
+    def upload_receipt(events, errors):
+        checkpoint = dict(saved, video_upload_events=list(events), video_upload_errors=list(errors))
+        write_json(marker, checkpoint)
+        saved.update(checkpoint)
+    capture = douyin_upload.Capture(upload_receipt)
+    page.on('response', capture.response)
+    try:
+        empty_upload(page).set_input_files(checked_path(video), timeout=15000)
+        page.wait_for_function('''() => {
+          const ns=Array.from(document.querySelectorAll('video'));
+          return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
+            && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
+            && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
+        }''', timeout=180000)
+        saved['video'] = video_identity(page)
+        saved['source_video'] = douyin_video.observe(page, video)
+    finally:
+        page.remove_listener('response', capture.response)
+    if capture.errors:
+        raise PublishError('抖音原生视频提交回执记录失败；保留尝试，不重传')
+    if capture.events:
+        saved['cloud_video'] = douyin_upload.receipt(capture.events, video_source, saved['source_video'])
+    saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
+    assert_identity(page, identity); no_warning(page)
+    title, description = assert_empty_fields(page)
+    # Do not overwrite an existing native declaration or collection.
+    if (declaration_control(page).inner_text() != '请选择自主声明'
+            or collection_value(page) != '请选择合集'):
+        raise PublishError('抖音已有声明或合集；不替换作者选择')
+    def progress(phase):
+        saved['phase'] = phase; write_json(marker, saved)
+    title.fill(pack['fields']['title'])
+    fill_description(page, pack, progress=progress)
+    saved['phase'] = 'declaration'; write_json(marker, saved)
+    select_declaration(page, declaration(pack['platform_metadata']), progress=progress)
+    if pack['platform_metadata'].get('collection_name'):
+        saved['phase'] = 'collection'; write_json(marker, saved)
+        select_collection(page, pack['platform_metadata']['collection_name'])
+    def cover_receipt(role, value):
+        saved.setdefault('covers', {})[role] = value; write_json(marker, saved)
+    douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
+    saved['phase'] = 'readback'; write_json(marker, saved)
+    verify_fields(page, pack, saved)
+    saved['state'] = 'filled'; saved['phase'] = 'complete'; write_json(marker, saved)
+
+
 def dispatch(request_path, action, profile, lock_fd):
     if action not in {'execute', 'verify'}: raise PublishError('不支持的抖音阶段')
     try: os.fstat(lock_fd)
@@ -446,50 +496,7 @@ def dispatch(request_path, action, profile, lock_fd):
             with os.fdopen(fd, 'w') as stream:
                 json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
             assert_identity(page, identity); no_warning(page)
-            def upload_receipt(events, errors):
-                checkpoint = dict(saved, video_upload_events=list(events), video_upload_errors=list(errors))
-                write_json(marker, checkpoint)
-                saved.update(checkpoint)
-            capture = douyin_upload.Capture(upload_receipt)
-            page.on('response', capture.response)
-            try:
-                empty_upload(page).set_input_files(checked_path(video), timeout=15000)
-                page.wait_for_function('''() => {
-                  const ns=Array.from(document.querySelectorAll('video'));
-                  return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
-                    && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
-                    && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
-                }''', timeout=180000)
-                saved['video'] = video_identity(page)
-                saved['source_video'] = douyin_video.observe(page, video)
-            finally:
-                page.remove_listener('response', capture.response)
-            if capture.errors:
-                raise PublishError('抖音原生视频提交回执记录失败；保留尝试，不重传')
-            if capture.events:
-                saved['cloud_video'] = douyin_upload.receipt(capture.events, video_source, saved['source_video'])
-            saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
-            assert_identity(page, identity); no_warning(page)
-            title, description = assert_empty_fields(page)
-            # Do not overwrite an existing native declaration or collection.
-            if (declaration_control(page).inner_text() != '请选择自主声明'
-                    or collection_value(page) != '请选择合集'):
-                raise PublishError('抖音已有声明或合集；不替换作者选择')
-            def progress(phase):
-                saved['phase'] = phase; write_json(marker, saved)
-            title.fill(pack['fields']['title'])
-            fill_description(page, pack, progress=progress)
-            saved['phase'] = 'declaration'; write_json(marker, saved)
-            select_declaration(page, declaration(pack['platform_metadata']), progress=progress)
-            if pack['platform_metadata'].get('collection_name'):
-                saved['phase'] = 'collection'; write_json(marker, saved)
-                select_collection(page, pack['platform_metadata']['collection_name'])
-            def cover_receipt(role, value):
-                saved.setdefault('covers', {})[role] = value; write_json(marker, saved)
-            douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
-            saved['phase'] = 'readback'; write_json(marker, saved)
-            verify_fields(page, pack, saved)
-            saved['state'] = 'filled'; saved['phase'] = 'complete'; write_json(marker, saved)
+            fill_new(page, pack, assets, cover_sources, identity, saved, marker)
         if saved.get('state') not in {'uploaded', 'filled'} or not saved.get('video'):
             raise PublishError('抖音尚未完成全部字段；只查询，不补填或重传')
         verify_fields(page, pack, saved); assert_identity(page, identity); no_warning(page)

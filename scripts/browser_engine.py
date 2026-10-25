@@ -39,6 +39,9 @@ def settings(profile, target):
 
 def check_pack(pack):
     if pack['platform'] == 'douyin':
+        if pack.get('endpoint')=='publish':
+            from douyin_publish_browser import check_pack as check_douyin_publish
+            return check_douyin_publish(pack)
         from douyin_browser import check_pack as check_douyin
         return check_douyin(pack)
     if pack['platform'] == 'weibo':
@@ -155,6 +158,9 @@ def dispatch(request_path, action, profile, lock_fd):
     if candidate.get('platform') == 'weibo' and candidate.get('endpoint') == 'publish':
         from weibo_publish_browser import dispatch as dispatch_weibo_publish
         return dispatch_weibo_publish(request_path, action, profile, lock_fd)
+    if candidate.get('platform') == 'douyin' and candidate.get('endpoint') == 'publish':
+        from douyin_publish_browser import dispatch as dispatch_douyin_publish
+        return dispatch_douyin_publish(request_path, action, profile, lock_fd)
     if candidate.get('platform')=='weibo' and candidate.get('content_type')=='video':
         from weibo_video_browser import dispatch as dispatch_weibo_video
         return dispatch_weibo_video(request_path,action,profile,lock_fd)
