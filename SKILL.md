@@ -15,7 +15,7 @@ metadata:
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
-显式选用包内浏览器引擎时读 [内置引擎](references/browser-engines.md)：X 文字与多图、微博文字与图片、抖音视频预填已做真实预填与只读续跑；抖音同时核对横竖封面、原生话题、声明与指定合集。均不能发送，未覆盖字段不得省略。临时编辑会话每次复用重新核对，不冒充平台已保存草稿。
+显式选用包内浏览器引擎时读 [内置引擎](references/browser-engines.md)：X 文字、多图与视频，微博文字与图片，抖音视频已做真实预填与只读续跑；X 视频核对原片字节和原生云端处理回执，抖音同时核对横竖封面、原生话题、声明与指定合集。均不能发送，未覆盖字段不得省略。临时编辑会话每次复用重新核对，不冒充平台已保存草稿。
 
 先解析当前 `SKILL.md` 所在真实目录作为 Skill 根；下列 `scripts/...` 路径相对该目录，不相对用户工程。核心需 macOS/Linux、Python 3.10+ 及执行本机命令的工具（使用 POSIX 文件锁）；不能据此宣称支持 Windows。核心仅用标准库，平台另有依赖：公众号使用本包内置官方 API（旧配置的显式 Write 模块仍兼容），补媒体还需当前 Agent 的浏览器能力。
 

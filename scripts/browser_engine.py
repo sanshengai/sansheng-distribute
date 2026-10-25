@@ -45,13 +45,16 @@ def check_pack(pack):
         from weibo_browser import check_pack as check_weibo
         return check_weibo(pack)
     if (pack['platform'] != 'x' or pack['endpoint'] != 'prefill'
-            or pack['content_type'] not in {'text','images'}):
-        raise PublishError('当前引擎仅承接 X text/images:prefill，不能公开发送或接收视频')
+            or pack['content_type'] not in {'text','images','video'}):
+        raise PublishError('当前引擎仅承接 X text/images/video:prefill，不能公开发送')
     document = pack['document']
     if (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
         raise PublishError('当前 X 引擎不承接文章、独立封面、字幕或平台扩展字段')
     if pack['content_type']=='images':
         from x_images import check
+        check(pack)
+    elif pack['content_type']=='video':
+        from x_video import check
         check(pack)
     elif pack['assets']:
         raise PublishError('X 纯文本目标不能静默省略素材；图片应选择 images 类型')
@@ -142,6 +145,10 @@ def marker_path(request_path):
 
 
 def dispatch(request_path, action, profile, lock_fd):
+    candidate=read_json(request_path).get('target', {})
+    if candidate.get('platform')=='x' and candidate.get('content_type')=='video':
+        from x_video_browser import dispatch as dispatch_x_video
+        return dispatch_x_video(request_path,action,profile,lock_fd)
     if read_json(request_path).get('target', {}).get('platform') == 'douyin':
         from douyin_browser import dispatch as dispatch_douyin
         return dispatch_douyin(request_path, action, profile, lock_fd)

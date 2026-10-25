@@ -10,7 +10,7 @@
         "baoyu-post-to-x",
         "baoyu-post-to-weibo"
       ],
-      "adoption": "workflow study; original in-package X text-prefill and Weibo text/images-prefill implementations; selectors cross-checked in a dedicated browser; no upstream executable vendored; Weibo per-image PID receipts and immutable snapshots are implemented locally; video/publication remain unaccepted"
+      "adoption": "workflow study; original in-package X text/images/video-prefill and Weibo text/images-prefill implementations; selectors cross-checked in a dedicated browser; no upstream executable vendored; Weibo per-image PID receipts and immutable snapshots are implemented locally; X native video prefill and cloud-processing receipts accepted on one short fixture; Weibo video and publication remain unaccepted"
     },
     {
       "repository": "https://github.com/dreammis/social-auto-upload",
