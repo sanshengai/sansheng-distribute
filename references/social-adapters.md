@@ -68,7 +68,7 @@ Profile 增加公开身份与专用浏览器路径（示例值须换为实际值
 | --- | --- | --- |
 | X | 包内纯文本预填；媒体及发送由 Agent 接力；旧配置兼容锁定宝玉预填桥 | 预填不是发送；上游退出 0 不是发帖成功；文章不走普通帖桥 |
 | 微博 | 包内文字/多图预填；视频及发送由 Agent 接力 | 临时编辑页不是已保存草稿；宝玉脚本仅预填 |
-| 抖音 | Agent 创作者后台；包内视频/声明/指定合集预填已实测，未含发送 | SAU upload-video 会提交，没有草稿模式，不能用于 draft/prefill |
+| 抖音 | Agent 创作者后台；包内视频/原生话题/声明/指定合集预填已实测，未含发送 | SAU upload-video 会提交，没有草稿模式，不能用于 draft/prefill |
 | B 站 | Agent 投稿、字幕与稿件管理查询 | SAU CLI 的 submitted 文本没有统一远端回执，不能直接映射 published |
 | 微信视频号 `wechat_channels` | Agent 视频号助手上传、管理与独立查询 | 与公众号 `wechat`、腾讯视频 `tencent_video` 独立；不复用账号ID或作品ID |
 | 腾讯视频 | Agent 腾讯视频创作平台 | SAU `tencent` 是视频号，不能替代腾讯视频 |

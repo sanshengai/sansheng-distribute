@@ -33,6 +33,9 @@ class Node:
         if self.kind=='file':return not self.page.pending_file
         if self.kind=='video':return dict(src=self.page.preview,duration=self.page.duration,ready=4)
         if self.kind=='description' and script==douyin.DESCRIPTION_READ:return self.page.description
+        if self.kind=='description' and script==douyin.NATIVE_DOCUMENT_READ:
+            return dict(text=self.page.description,topics=list(self.page.topics))
+        if self.kind=='description' and script==douyin.CARET_AT_END:return self.page.caret_at_end
         raise AssertionError(self.kind)
     def evaluate_all(self,script):return bool(self.page.pending_file)
     def all(self):return []
@@ -45,8 +48,14 @@ class Node:
     def fill(self,value):
         self.page.fills+=1
         if self.kind=='title':self.page.title=value
-        elif self.kind=='description':self.page.description=value
+        elif self.kind=='description':self.page.description=value;self.page.topics=[]
         else:raise AssertionError(self.kind)
+    def press(self,key,**kwargs):
+        if self.kind!='description' or key!='Enter':raise AssertionError(key)
+        self.page.description+='\n'
+    def press_sequentially(self,value,**kwargs):
+        if self.kind!='description':raise AssertionError(self.kind)
+        self.page.description+=value
     def set_input_files(self,path,**kwargs):
         self.page.uploads.append(Path(path).read_bytes());self.page.url='https://creator.douyin.com'+douyin.EDITOR
         if self.page.lose_upload:raise RuntimeError('upload outcome lost')
@@ -73,6 +82,9 @@ class Node:
         elif self.kind=='confirm':p.declaration=p.pending_declaration;p.modal=False
         elif self.kind=='collection':p.dropdown=True
         elif self.kind=='option':p.collection=self.values[0];p.dropdown=False
+        elif self.kind=='add_topic':p.description+='#'
+        elif self.kind=='topic':
+            p.topics.append(self.values[0]);p.description+=' '
         else:raise AssertionError(self.kind)
     def wait_for(self,**kwargs):
         if self.page.lost_identity:raise RuntimeError('identity page unavailable')
@@ -96,6 +108,7 @@ class Page:
         self.lose_upload=False;self.lost_identity=False;self.identity_goto_error=False
         self.identity_closed=0;self.identity_opened=0;self.context=self;self.ident='DouyinFixtureTarget'
         self.remount_first_choice=False;self.remount_every_choice=False;self.choice_clicks=0
+        self.topics=[];self.topic_options=['知识图解','AI'];self.caret_at_end=True
         self.preview='https://video-cn.douyin.com/sign/expiry/tos-cn-v-fixture/fixtureObject?rotating=1';self.duration=4
     @property
     def pages(self):return [self]
@@ -116,9 +129,11 @@ class Page:
         if selector=='input[type="file"]':return Node(self,'file')
         if selector=='video':return Node(self,'video')
         if selector==douyin.DECLARATION_MODAL:return Node(self,'modal')
+        if selector==douyin.TOPIC_NAME:return Node(self,'topic',self.topic_options)
         if selector.startswith('[role="option"]'):return Node(self,'option',self.options)
         return Node(self,'alert')
-    def get_by_text(self,text,**kwargs):return Node(self,'label' if text=='自主声明' else 'reupload')
+    def get_by_text(self,text,**kwargs):
+        return Node(self,'add_topic' if text=='#添加话题' else 'label' if text=='自主声明' else 'reupload')
 
 
 class DouyinTests(unittest.TestCase):
@@ -288,12 +303,72 @@ class DouyinTests(unittest.TestCase):
 
     def test_unmapped_fields_or_final_send_refused_before_upload(self):
         from platform_pack import build_pack
-        for field,value in [('endpoint','publish'),('tags',['话题']),('platform_metadata',{'collection_id':'12'}),
+        for field,value in [('endpoint','publish'),('tags',['空 白']),('platform_metadata',{'collection_id':'12'}),
                             ('platform_metadata',{'ai_generated':'true'}),('platform_metadata',{}),
                             ('platform_metadata',{'ai_generated':True,'declaration':'无需添加自主声明'})]:
             modified=copy.deepcopy(self.manifest);modified['targets'][0][field]=value
             with self.assertRaises(PublishError):douyin.check_pack(build_pack(modified,'douyin',self.profile))
         self.assertEqual(self.page.uploads,[])
+
+    def with_topics(self, names=('知识图解','AI')):
+        self.manifest['targets'][0]['tags']=list(names)
+        validate(self.manifest,sealing=True);write_json(self.path,self.manifest)
+        self.key=self.store.prepare(self.manifest,'douyin')['key']
+        self.store.authorize(self.manifest,'douyin','test native topics prefill')
+
+    def test_topics_native_entities_complete_text_links_and_query_only_resume(self):
+        self.with_topics()
+        result=run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(result['state'],'prefill_ready')
+        self.assertEqual(self.page.topics,['知识图解','AI'])
+        self.assertEqual(self.page.description,'完整简介\n保留换行\n\n#知识图解 #AI \n\n资料：https://example.org/read')
+        before=(self.page.description,self.page.fills,len(self.page.uploads))
+        run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(before,(self.page.description,self.page.fills,len(self.page.uploads)))
+
+    def test_plain_hashtag_text_is_not_native_binding(self):
+        self.with_topics();run(self.path,'douyin',self.profile,self.store)
+        self.page.topics=[]
+        with self.assertRaisesRegex(PublishError,'标题或简介已改变'):
+            run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_topic_order_or_extra_topic_never_reports_ready(self):
+        self.with_topics();run(self.path,'douyin',self.profile,self.store)
+        for topics in (['AI','知识图解'],['知识图解','AI','other']):
+            self.page.topics=topics
+            with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_missing_native_topic_stops_without_fallback_or_reupload(self):
+        self.with_topics();self.page.topic_options=[]
+        with self.assertRaisesRegex(PublishError,'指定原生话题'):run(self.path,'douyin',self.profile,self.store)
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1);self.assertEqual(self.page.topics,[])
+
+    def test_duplicate_native_topic_matches_are_not_guessed(self):
+        self.with_topics();self.page.topic_options=['知识图解','知识图解']
+        with self.assertRaisesRegex(PublishError,'指定原生话题'):run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(len(self.page.uploads),1);self.assertEqual(self.page.topics,[])
+
+    def test_topics_preserve_authored_spaces_and_hidden_characters(self):
+        self.manifest['targets'][0]['description']='  authored\u200b  '
+        self.with_topics();run(self.path,'douyin',self.profile,self.store)
+        self.assertTrue(self.page.description.startswith('  authored\u200b  \n\n'))
+        self.page.description=self.page.description.replace('authored\u200b','authored')
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+
+    def test_caret_moved_before_append_preserves_existing_text(self):
+        self.with_topics();self.page.caret_at_end=False
+        with self.assertRaisesRegex(PublishError,'光标不在末尾'):run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(self.page.description,'完整简介\n保留换行');self.assertEqual(self.page.topics,[])
+
+    def test_duplicate_empty_or_unsupported_topics_rejected_before_connect(self):
+        from platform_pack import build_pack
+        for tags in (['AI','#AI'],['#'],['空 白'],['隐\u200b藏'],list('abcdef')):
+            changed=copy.deepcopy(self.manifest);changed['targets'][0]['tags']=tags
+            with self.assertRaises(PublishError):douyin.check_pack(build_pack(changed,'douyin',self.profile))
+        self.assertEqual(self.page.uploads,[]);self.assertEqual(self.page.identity_opened,0)
 
 
 if __name__=='__main__':unittest.main()

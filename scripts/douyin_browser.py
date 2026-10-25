@@ -19,6 +19,57 @@ TITLE = 'input[placeholder*="填写作品标题"]'
 DESCRIPTION = 'div.zone-container[contenteditable="true"]'
 COLLECTION = '.semi-select[class*="select-collection-"]'
 DECLARATION_MODAL = '.semi-portal [role="modal"]'
+TOPIC_NAME = '.mention-suggest-mount-dom [class^="tag-hash-view-name-"]'
+NATIVE_DOCUMENT_READ = '''(n) => {
+  const topics=[];
+  const lines=Array.from(n.children);
+  if (!lines.length || !lines.every(x=>x.matches('.ace-line[data-node="true"]'))) {
+    if(n.querySelector('[data-mention],[data-rect-container]')) throw new Error('unknown native document');
+    return {text:n.innerText,topics};
+  }
+  const text=lines.map(line=>{
+    const clone=line.cloneNode(true);
+    for(const box of clone.querySelectorAll('[data-rect-container="true"]')) {
+      const zero=box.children[0],fake=box.children[1],mention=fake?.firstElementChild;
+      const label=mention?.children[0];
+      if(box.childNodes.length!==2 || !zero?.matches('[data-zero-space="true"]')
+        || zero.textContent!=='\\u200b' || !fake?.matches('[data-fake-text=" "][contenteditable="false"]')
+        || fake.childNodes.length!==1 || !mention?.matches('[data-mention="#"]')
+        || mention.childNodes.length!==3 || mention.firstChild.textContent!=='\\u00a0'
+        || mention.lastChild.textContent!=='\\u00a0' || mention.children.length!==1
+        || !label?.textContent.startsWith('#') || label.textContent.length<2)
+          throw new Error('unknown native topic structure');
+      topics.push(label.textContent.slice(1));
+      box.replaceWith(document.createTextNode(label.textContent));
+    }
+    if(clone.querySelector('[data-mention],[data-zero-space],[data-fake-text]'))
+      throw new Error('unrecognized native entity');
+    for(const marker of clone.querySelectorAll('[data-string="true"][data-enter="true"]')) {
+      if(marker.textContent!=='\\u200b') throw new Error('unknown native line marker');
+      marker.remove();
+    }
+    return clone.textContent;
+  }).join('\\n');
+  return {text,topics};
+}'''
+CARET_AT_END = '''(n) => {
+  const s=getSelection();
+  if(!s || !s.rangeCount || !s.isCollapsed || !n.contains(s.anchorNode)) return false;
+  const parent=s.anchorNode.nodeType===3?s.anchorNode.parentElement:s.anchorNode;
+  const lines=Array.from(n.children);
+  if(lines.length && parent.closest('.ace-line[data-node="true"]')!==lines[lines.length-1]) return false;
+  for(const marker of n.querySelectorAll('[data-string="true"][data-enter="true"]'))
+    if(marker.textContent!=='\\u200b') return false;
+  const r=s.getRangeAt(0).cloneRange();r.setEnd(n,n.childNodes.length);
+  const fragment=r.cloneContents();
+  for(const marker of fragment.querySelectorAll('[data-string="true"][data-enter="true"]')) {
+    // A range starting after the native marker contains an empty partial clone.
+    // The original marker above must still have its verified full value.
+    if(marker.textContent!=='' && marker.textContent!=='\\u200b') return false;
+    marker.remove();
+  }
+  return fragment.textContent==='' && !fragment.querySelector('[data-mention]');
+}'''
 DESCRIPTION_READ = '''(n) => {
   const lines=Array.from(n.children);
   if (!lines.length || !lines.every(x=>x.matches('.ace-line[data-node="true"]')))
@@ -62,13 +113,14 @@ def check_pack(pack):
     if pack['platform'] != 'douyin' or pack['endpoint'] != 'prefill' or pack['content_type'] != 'video':
         raise PublishError('当前抖音包内路线仅 video:prefill；不保存或公开发送')
     fields, metadata = pack['fields'], pack['platform_metadata']
-    if pack['document'] or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or fields['tags']:
-        raise PublishError('抖音文章、指定封面、字幕和原生话题尚未接入；不静默省略')
+    if pack['document'] or pack['cover_asset_id'] or pack['subtitle_asset_ids']:
+        raise PublishError('抖音文章、指定封面和字幕尚未接入；不静默省略')
+    topic_names(pack)
     if (len(pack['assets']) != 1 or pack['assets'][0]['kind'] != 'video'
             or Path(pack['assets'][0]['path']).suffix.lower() != '.mp4'):
         raise PublishError('当前抖音路线须且仅须一个 MP4；其他素材不能丢弃')
     if (not fields['title'].strip() or len(fields['title']) > 30
-            or len(fields['composed_text']) > 1000
+            or len(topic_document(pack)['text']) > 1000
             or (fields['text'] and fields['description'] and fields['text'] != fields['description'])):
         raise PublishError('抖音标题/简介不符合当前已核对字段；不截断或丢弃第二套描述')
     if set(metadata) - {'ai_generated', 'declaration', 'collection_name'}:
@@ -77,6 +129,29 @@ def check_pack(pack):
             or not metadata['collection_name'].strip()):
         raise PublishError('指定合集名称必须为非空字符串')
     declaration(metadata)
+
+
+def topic_names(pack):
+    names = [tag.lstrip('#') for tag in pack['fields']['tags']]
+    # This is the bounded engine's supported input, not a platform-wide limit.
+    if (len(names) > 5 or len(set(names)) != len(names)
+            or any(not name or re.search(r'[#\s\u200b]', name) for name in names)):
+        raise PublishError('当前抖音原生话题支持最多五个不同的非空名称；不能含空白或井号')
+    return names
+
+
+def topic_document(pack):
+    fields = pack['fields']; names = topic_names(pack)
+    if not names:
+        return dict(text=fields['composed_text'], topics=[])
+    body = fields['text'] or fields['description']
+    links = '\n'.join((x.get('label', '')+'：' if x.get('label') else '')+x['url'] for x in fields['links'])
+    # Native selection adds one ordinary trailing space per topic. Preserve it
+    # explicitly; never strip authored spaces or invisible characters globally.
+    value = (body+'\n\n' if body else '') + ''.join('#'+name+' ' for name in names)
+    if links:
+        value += '\n\n'+links
+    return dict(text=value, topics=names)
 
 
 def origin(page, path):
@@ -142,6 +217,64 @@ def description_text(field):
     # Ignore only verified editor-owned line markers; preserve authored hidden
     # characters and whitespace. The original DOM is never altered.
     return field.evaluate(DESCRIPTION_READ)
+
+
+def native_document(field):
+    return field.evaluate(NATIVE_DOCUMENT_READ)
+
+
+def wait_document(page, expected):
+    page.wait_for_function('''expected => {
+      const n=document.querySelector('''+json.dumps(DESCRIPTION)+''');
+      if(!n) return false;
+      const actual=('''+NATIVE_DOCUMENT_READ+''')(n);
+      return actual.text===expected.text && JSON.stringify(actual.topics)===JSON.stringify(expected.topics);
+    }''', arg=expected, timeout=5000)
+    if native_document(page.locator(DESCRIPTION)) != expected:
+        raise PublishError('抖音原生话题与完整文案读回不符')
+
+
+def append_text(field, text):
+    if not field.evaluate(CARET_AT_END):
+        raise PublishError('抖音简介光标不在末尾；不猜测插入位置')
+    # Enter is an editor action, not a literal newline inside a text leaf.
+    for index, part in enumerate(text.split('\n')):
+        if index:
+            field.press('Enter', timeout=5000)
+        if part:
+            field.press_sequentially(part, timeout=5000)
+
+
+def fill_description(page, pack, *, progress=lambda phase: None):
+    field = page.locator(DESCRIPTION); names = topic_names(pack)
+    if not names:
+        field.fill(pack['fields']['composed_text'])
+        return
+    fields = pack['fields']; body = fields['text'] or fields['description']
+    field.fill(body)
+    wait_document(page, dict(text=body, topics=[]))
+    current = body
+    if body:
+        append_text(field, '\n\n'); current += '\n\n'
+    chosen = []
+    for index, name in enumerate(names):
+        progress('topic_'+str(index+1)+'_search')
+        if not field.evaluate(CARET_AT_END):
+            raise PublishError('抖音话题插入光标不在末尾')
+        unique(page.get_by_text('#添加话题', exact=True), '添加话题').click(timeout=5000)
+        wait_document(page, dict(text=current+'#', topics=list(chosen)))
+        append_text(field, name)
+        wait_document(page, dict(text=current+'#'+name, topics=list(chosen)))
+        match = page.locator(TOPIC_NAME).filter(has_text=re.compile('^'+re.escape(name)+'$')).filter(visible=True)
+        match.wait_for(state='visible', timeout=10000)
+        unique(match, '指定原生话题').click(timeout=5000)
+        current += '#'+name+' '; chosen.append(name)
+        progress('topic_'+str(index+1)+'_readback')
+        wait_document(page, dict(text=current, topics=list(chosen)))
+    links = '\n'.join((x.get('label', '')+'：' if x.get('label') else '')+x['url'] for x in fields['links'])
+    if links:
+        append_text(field, '\n\n'+links)
+    wait_document(page, topic_document(pack))
 
 
 def video_identity(page):
@@ -249,8 +382,8 @@ def select_collection(page, name):
 
 def verify_fields(page, pack, saved):
     title, description = text_fields(page)
-    expected = pack['fields']['composed_text']
-    actual = description_text(description)
+    expected = topic_document(pack)
+    actual = native_document(description)
     if title.input_value() != pack['fields']['title'] or actual != expected:
         raise PublishError('抖音标题或简介已改变；不报告预填完成')
     if video_identity(page) != saved.get('video'):
@@ -315,10 +448,11 @@ def dispatch(request_path, action, profile, lock_fd):
             if (declaration_control(page).inner_text() != '请选择自主声明'
                     or collection_value(page) != '请选择合集'):
                 raise PublishError('抖音已有声明或合集；不替换作者选择')
-            title.fill(pack['fields']['title']); description.fill(pack['fields']['composed_text'])
-            saved['phase'] = 'declaration'; write_json(marker, saved)
             def progress(phase):
                 saved['phase'] = phase; write_json(marker, saved)
+            title.fill(pack['fields']['title'])
+            fill_description(page, pack, progress=progress)
+            saved['phase'] = 'declaration'; write_json(marker, saved)
             select_declaration(page, declaration(pack['platform_metadata']), progress=progress)
             if pack['platform_metadata'].get('collection_name'):
                 saved['phase'] = 'collection'; write_json(marker, saved)
