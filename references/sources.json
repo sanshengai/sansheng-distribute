@@ -50,5 +50,23 @@
       ],
       "adoption": "optional private binary download; no binary or source vendored; in-package controlled adapter is disabled pending its own real-upload acceptance"
     }
+  ],
+  "native_observations": [
+    {
+      "platform": "weibo_video",
+      "reviewed_at": "2026-10-25",
+      "creator_url": "https://weibo.com/upload/channel",
+      "assets": [
+        {
+          "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/index-Cek3Wq5B.js",
+          "sha256": "db814e8b2ed6f94172ff7aadf4376ded08f7c24120e111e13714d5676a729e39"
+        },
+        {
+          "url": "https://h5.sinaimg.cn/m/weibo-pro-next/assets/VideoUpload-Big839Ru.js",
+          "sha256": "197fbe689100d62a572f506c73eb9875cf80152af9a54f519a276ddc7f2e4b0c"
+        }
+      ],
+      "adoption": "Observed route, delayed SDK binding, native detached file chooser, visible editor completion, and native cloud response contract; independent implementation of upload primitives only. No frontend source vendored; no complete video prefill, read-only recovery, or public submission capability claimed."
+    }
   ]
 }
