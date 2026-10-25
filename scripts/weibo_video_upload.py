@@ -31,6 +31,66 @@ SOURCE = '''async n=>{
  }
  return {size:f.size,chunks};
 }'''
+NATIVE_SOURCE = '''async()=>{
+ const queue=[document.querySelector('#app')?._vnode],seen=new Set(),found=[];
+ let count=0;
+ while(queue.length){
+   if(count>=2000)throw Error('native tree limit');
+   const n=queue.shift();if(!n||typeof n!=='object'||seen.has(n))continue;
+   seen.add(n);count++;
+   if(n.component){
+     const c=n.component,d=c.data||{},u=d.wbUploader;
+     if(u&&/^video_button_upload_[0-9]+$/.test(d.id||''))found.push({data:d,uploader:u});
+     queue.push(c.subTree);
+   }
+   if(Array.isArray(n.children))queue.push(...n.children);
+   if(Array.isArray(n.dynamicChildren))queue.push(...n.dynamicChildren);
+   if(n.ssContent)queue.push(n.ssContent);
+ }
+ if(found.length!==1)throw Error('uploader not unique');
+ const {data:d,uploader:u}=found[0],f=u.currFile;
+ if(u.version!=='1.2.3'||d.status!=='success'||d.uploadProgress!==100||
+    Object.prototype.toString.call(f)!=='[object File]'||!f.initRes?.media_id)
+   throw Error('uploader not ready');
+ const chunks=[];
+ for(let start=0;start<f.size;start+=8388608){
+   const hash=await crypto.subtle.digest('SHA-256',await f.slice(start,start+8388608).arrayBuffer());
+   chunks.push([...new Uint8Array(hash)].map(x=>x.toString(16).padStart(2,'0')).join(''));
+ }
+ return {media_id:f.initRes.media_id,size:f.size,chunks,sdk_version:u.version,
+         width:u.videoInfo?.width,height:u.videoInfo?.height,duration:u.videoInfo?.duration};
+}'''
+
+
+def observe_source(page, asset, saved):
+    """Read the native SDK's current File and media ID, without invoking it.
+
+    The DOM success label alone also exists in hidden templates and is
+    insufficient. No component methods, upload functions or app callbacks run.
+    """
+    if (saved.get('upload_errors') != [] or saved.get('source_sha256') != asset['sha256']
+            or type(saved.get('source_size')) is not int or saved['source_size'] <= 0):
+        raise PublishError('微博视频源绑定或上传记录不完整')
+    cloud = cloud_receipt(saved.get('upload_events'), saved['source_size'])
+    try:
+        if not page.evaluate(READY):raise ValueError('completion not visible')
+        native = page.evaluate(NATIVE_SOURCE)
+    except Exception as exc:
+        raise PublishError('微博原生上传器状态无法完整只读核对；不重传') from exc
+    source = Path(checked_path(asset)); chunks = []; original = hashlib.sha256()
+    with source.open('rb') as stream:
+        while data := stream.read(8388608):
+            original.update(data); chunks.append(hashlib.sha256(data).hexdigest())
+    if (not isinstance(native, dict) or original.hexdigest() != asset['sha256'] or native.get('chunks') != chunks
+            or type(native.get('size')) is not int or native['size'] != saved['source_size']
+            or native.get('media_id') != cloud['media_id'] or native.get('sdk_version') != '1.2.3'
+            or any(type(native.get(k)) is not int or native[k] <= 0 for k in ('width','height'))
+            or type(native.get('duration')) not in (int,float) or not math.isfinite(native['duration'])
+            or native['duration'] <= 0):
+        raise PublishError('微博当前视频文件、媒体 ID 或元数据已变；不报告原稿完成')
+    return dict(cloud,source_sha256=asset['sha256'],source_asset_id=asset['id'],
+                width=native['width'],height=native['height'],duration=native['duration'],
+                tracking_scope='native_current_file_and_cloud_receipt')
 
 
 def assert_identity(page, expected):

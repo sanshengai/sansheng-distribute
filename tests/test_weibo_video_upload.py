@@ -185,4 +185,63 @@ class Readiness(unittest.TestCase):
         with self.assertRaises(PublishError):video.assert_identity(self.page,'12345678')
 
 
+class NativeObservation(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        source=Path(self.tmp.name)/'video.mp4';source.write_bytes(b'0123456789ab')
+        digest=hashlib.sha256(source.read_bytes()).hexdigest()
+        self.asset=dict(id='source-video',absolute_path=str(source),sha256=digest)
+        self.saved=dict(source_sha256=digest,source_size=12,upload_events=receipts(),upload_errors=[])
+        self.native=dict(media_id='12345678',size=12,chunks=[digest],sdk_version='1.2.3',
+                         width=1920,height=1080,duration=62)
+        self.visible=True;self.calls=[];outer=self
+        class Page:
+            def evaluate(self,script):
+                outer.calls.append(script)
+                return outer.visible if script==video.READY else copy.deepcopy(outer.native)
+        self.page=Page()
+
+    def test_readonly_observation_binds_native_current_bytes_and_cloud_identity(self):
+        result=video.observe_source(self.page,self.asset,self.saved)
+        self.assertEqual(result['tracking_scope'],'native_current_file_and_cloud_receipt')
+        self.assertEqual(result['source_asset_id'],'source-video')
+        self.assertEqual(result['media_id'],'12345678')
+        self.assertEqual(self.calls,[video.READY,video.NATIVE_SOURCE])
+
+    def test_current_file_identity_bytes_and_metadata_must_match(self):
+        original=copy.deepcopy(self.native)
+        for key,value in [('media_id','87654321'),('media_id',12345678),('size',13),('size',True),
+                          ('chunks',[]),('chunks',['0'*64]),('sdk_version','1.2.4'),
+                          ('width',0),('width',True),('height',None),('duration',0),
+                          ('duration',float('nan')),('duration',float('inf')),('duration',True)]:
+            with self.subTest(key=key,value=value):
+                self.native=copy.deepcopy(original);self.native[key]=value
+                with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+        for malformed in (None,[],{},'success'):
+            self.native=malformed
+            with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+
+    def test_incomplete_cloud_or_saved_binding_stops_before_browser_observation(self):
+        original=copy.deepcopy(self.saved)
+        for key,value in [('upload_events',[]),('upload_events',receipts()[:-1]),
+                          ('upload_errors',['unrecorded']),('upload_errors',None),('upload_errors',{}),
+                          ('source_sha256','0'*64),
+                          ('source_size',0),('source_size',True)]:
+            self.saved=copy.deepcopy(original);self.saved[key]=value;self.calls=[]
+            with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+            self.assertEqual(self.calls,[])
+
+    def test_hidden_completion_and_unreadable_native_state_do_not_upload_again(self):
+        self.visible=False
+        with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+        self.assertEqual(self.calls,[video.READY])
+        class Unreadable:
+            def evaluate(self,script):raise RuntimeError('native tree changed')
+        with self.assertRaises(PublishError):video.observe_source(Unreadable(),self.asset,self.saved)
+
+    def test_local_source_change_cannot_be_accepted_by_old_native_receipt(self):
+        Path(self.asset['absolute_path']).write_bytes(b'changed bytes')
+        with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+
+
 if __name__=='__main__':unittest.main()
