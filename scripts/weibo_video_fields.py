@@ -48,18 +48,19 @@ def check(pack):
         raise PublishError('当前微博视频预填支持最多五个不同的普通 #话题#，不含空白或内部井号')
 
 
-def unique(node,label):
-    if node.count()!=1 or not node.is_visible():raise PublishError('微博视频'+label+'不能唯一核对')
+def unique(node,label,*,hidden=False):
+    if node.count()!=1 or (not hidden and not node.is_visible()):raise PublishError('微博视频'+label+'不能唯一核对')
     return node
 
 
-def snapshot(page):
-    title=unique(page.locator(TITLE),'标题');text=unique(page.locator(TEXT),'描述')
-    radios=page.locator('label.woo-radio-main:visible').evaluate_all('''ns=>ns.map(n=>({
+def snapshot(page,*,cover_editing=False):
+    title=unique(page.locator(TITLE),'标题',hidden=cover_editing);text=unique(page.locator(TEXT),'描述',hidden=cover_editing)
+    radios=page.locator('label.woo-radio-main'+('' if cover_editing else ':visible')).evaluate_all('''ns=>ns.map(n=>({
       label:n.innerText.trim(),checked:n.querySelector('input[type=radio]')?.checked}))''')
     if len(radios)!=3 or {r['label'] for r in radios}!=TYPES or any(type(r['checked']) is not bool for r in radios):
         raise PublishError('微博视频类型控件改变；不猜选')
-    label=unique(page.locator(DECLARATION),'内容声明').inner_text().strip()
+    node=unique(page.locator(DECLARATION),'内容声明',hidden=cover_editing)
+    label=(node.text_content() if cover_editing else node.inner_text()).strip()
     return dict(title=title.input_value(),description=text.input_value(),radios=radios,declaration=label)
 
 
@@ -70,8 +71,8 @@ def empty(page):
         raise PublishError('微博视频已存在文案、类型或声明；保留原稿，不覆盖')
 
 
-def observe(page,pack):
-    value=snapshot(page)
+def observe(page,pack,*,cover_editing=False):
+    value=snapshot(page,cover_editing=cover_editing)
     if (value['title']!=pack['fields']['title'] or value['description']!=pack['fields']['composed_text']
             or value['declaration']!=declaration(pack['platform_metadata'])
             or [r['label'] for r in value['radios'] if r['checked']]!=[pack['platform_metadata']['creation_type']]):

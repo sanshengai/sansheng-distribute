@@ -1,4 +1,4 @@
-"""Single native 16:9 cover, source/crop/upload PID bound; no silent cropping."""
+"""Native landscape/portrait cover, source/crop/upload PID bound; no silent crop."""
 from __future__ import annotations
 import base64
 import hashlib
@@ -37,8 +37,8 @@ def prepare(page,asset):
     try:
         value=page.evaluate('''async src=>{const i=new Image();i.src=src;await i.decode();return {width:i.naturalWidth,height:i.naturalHeight};}''',src)
         w,h=value['width'],value['height']
-        if any(type(x) is not int or not 0<x<=4096 for x in (w,h)) or w*9!=h*16:raise ValueError('ratio')
-    except Exception as exc:raise PublishError('微博视频封面须可解码的16:9源图，边长不超过4096；不自动裁切') from exc
+        if any(type(x) is not int or not 0<x<=4096 for x in (w,h)) or (w*9!=h*16 and w*4!=h*3):raise ValueError('ratio')
+    except Exception as exc:raise PublishError('微博视频封面须可解码的16:9或3:4源图，边长不超过4096；不自动裁切') from exc
     return dict(value,source_asset_id=asset['id'],source_sha256=asset['sha256'],source_size=size)
 
 
@@ -46,12 +46,33 @@ def verify_crop(value,prepared):
     crop=value.get('crop',{})
     if (value.get('source_sha256')!=prepared['source_sha256'] or value.get('source_size')!=prepared['source_size']
             or value.get('width')!=prepared['width'] or value.get('height')!=prepared['height']
-            or value.get('aspect_ratio')!=16/9 or crop.get('x')!=0 or crop.get('y')!=0
+            or value.get('aspect_ratio')!=prepared['width']/prepared['height'] or crop.get('x')!=0 or crop.get('y')!=0
             or crop.get('width')!=prepared['width'] or crop.get('height')!=prepared['height']
             or crop.get('rotate')!=0 or crop.get('scaleX')!=1 or crop.get('scaleY')!=1
             or type(value.get('native_size')) is not int or value['native_size']<=0
             or not re.fullmatch('[a-f0-9]{64}',value.get('native_sha256',''))):
         raise PublishError('微博原生封面源图或裁剪结果不符；不点击完成')
+
+
+def check_video_ratio(prepared, video):
+    # Observed native creator selects 16:9 for landscape and 3:4 for portrait.
+    # Square has not been observed; reject rather than guess its crop policy.
+    w,h=video['width'],video['height']
+    if w==h or prepared['width']* (9 if w>h else 4)!=prepared['height']*(16 if w>h else 3):
+        raise PublishError('微博封面与视频方向不符：横屏用16:9，竖屏用3:4；交回制作端，不上传或自动裁切')
+
+
+def incomplete(page,asset,prepared,saved):
+    """Recognize only the exact pre-completion crop stage, without accepting it."""
+    if (not isinstance(saved,dict) or saved.get('prepared')!=prepared
+            or saved.get('requests')!=[] or saved.get('responses')!=[] or saved.get('errors')!=[]):
+        raise PublishError('微博未完成封面状态不明；不认领其他编辑会话')
+    checked_path(asset)
+    value=page.evaluate(CROP)
+    if value.get('source_sha256')!=asset['sha256'] or value.get('source_size')!=prepared['source_size']:
+        raise PublishError('微博未完成封面的源图已变；保留未知状态')
+    return dict(stage='cover_editing_required',native_aspect_ratio=value['aspect_ratio'],
+                source_asset_id=asset['id'],source_sha256=asset['sha256'])
 
 
 def preview(page,pid):

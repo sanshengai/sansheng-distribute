@@ -43,6 +43,7 @@ if mode=='crash' and action=='execute': raise SystemExit(5)
 if mode=='unknown': raise SystemExit(6)
 o={'manifest_digest':r['manifest_digest'],'target_id':t['id'],'platform':t['platform'],'account':t['account'],'remote_id':'remote-'+t['id'],'state':'draft_ready','content_verified':True}
 if mode=='absent' and action=='verify': o.update(state='not_submitted',remote_id=None,absence_verified=True)
+if mode=='cover_pending': o.update(state='pending',stage='cover_editing_required')
 print(json.dumps(o))
 ''')
         write_json(self.root / "modes.json", {})
@@ -162,6 +163,18 @@ print(json.dumps(o))
         write_json(self.path, self.manifest)
         with self.assertRaisesRegex(PublishError, "作者"):
             prepare_campaign(self.path, self.store)
+
+    def test_incomplete_cover_reports_inspect_and_does_not_claim_all_endpoints(self):
+        self.authorize()
+        write_json(self.root/'modes.json',{'weibo':'cover_pending'})
+        report=run_campaign(self.cid,self.profile,self.store)
+        self.assertFalse(report['all_endpoints_reached'])
+        row=next(t for t in report['targets'] if t['target_id']=='weibo')
+        self.assertEqual(row['state'],'pending');self.assertEqual(row['next_action'],'inspect')
+        self.assertIn('封面方向',row['author_action'])
+        before=self.calls()
+        run_campaign(self.cid,self.profile,self.store,resume=True)
+        self.assertEqual(self.calls()[len(before):],[['weibo','verify']])
 
 
 if __name__ == "__main__":

@@ -66,6 +66,8 @@ def _actions(job, observation):
         return "recover", "登录或平台验证确需本人时介入；查询前不要重复提交"
     if state == "pending":
         stage = observation.get("stage")
+        if stage == 'cover_editing_required':
+            return 'inspect', observation.get('author_action') or '核对原编辑器与封面方向；需换素材时重新封存，不重传已完成目标'
         if stage in {"native_media_insertion_required", "visual_review_required", "external_link_repair_required"}:
             return "advance", "需要 Agent 补齐同一草稿并读回；本人登录或视觉确认时再介入"
         return "resume", observation.get("author_action")

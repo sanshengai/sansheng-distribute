@@ -50,7 +50,7 @@ class Dispatch(unittest.TestCase):
             page.selected.append(checked_path(asset));page.video=True
             checkpoint('selected_once',{'source_sha256':asset['sha256']})
             if page.lose_after_select:raise RuntimeError('lost after selection')
-        def observe_video(page,asset,saved):
+        def observe_video(page,asset,saved,**kwargs):
             checked_path(asset)
             if not page.video:raise PublishError('视频已变')
             return dict(media_id='12345678',source_sha256=asset['sha256'])
@@ -58,7 +58,7 @@ class Dispatch(unittest.TestCase):
             if page.document is not None:raise PublishError('已有作者文案')
             page.document=copy.deepcopy(pack['fields']);page.filled+=1
             if page.lose_after_fill:raise RuntimeError('lost after fill')
-        def observe_fields(page,pack):
+        def observe_fields(page,pack,**kwargs):
             if page.document!=pack['fields']:raise PublishError('文案不符')
             return page.document
         for owner,name,fn in [(engine,'connect',connect),(engine,'background_window',window),(engine,'select_page',select),
@@ -116,6 +116,55 @@ class Dispatch(unittest.TestCase):
         run(self.path,'weibo',self.profile,self.store);self.page.pending=True
         with self.assertRaisesRegex(PublishError,'新增待处理文件'):run(self.path,'weibo',self.profile,self.store,resume=True)
         self.assertEqual(len(self.page.selected),1)
+
+    def test_incomplete_native_cover_is_pending_and_never_ready_or_reuploaded(self):
+        # Create a real core attempt first; simulate interruption BEFORE cover completion.
+        source=self.root/'cover.png';source.write_bytes(b'cover')
+        self.manifest['assets'].append(dict(id='cover',kind='image',path='cover.png'))
+        target=self.manifest['targets'][0];target['asset_ids']=['video','cover'];target['cover_asset_id']='cover'
+        validate(self.manifest,sealing=True);write_json(self.path,self.manifest)
+        self.key=self.store.prepare(self.manifest,'weibo')['key'];self.store.authorize(self.manifest,'weibo','offline prefill')
+        prepared=dict(width=1600,height=900)
+        def stop(page,asset,prepared,checkpoint):
+            checkpoint('cover_selected',{'prepared':prepared,'requests':[],'responses':[],'errors':[]})
+            raise PublishError('native crop requires correction')
+        meta=dict(width=1920,height=1080,duration=4.0)
+        with patch.object(engine.video_probe,'inspect',return_value=meta),\
+             patch.object(engine.cover,'prepare',return_value=prepared),\
+             patch.object(engine.cover,'check_video_ratio'),\
+             patch.object(engine.cover,'upload',side_effect=stop):
+            native=dict(meta,media_id='12345678')
+            with patch.object(engine.video,'observe_source',return_value=native):
+                with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store)
+                marker=engine.home.marker_path(self.request);before=marker.read_bytes()
+                with patch.object(engine.cover,'incomplete',return_value=dict(stage='cover_editing_required')):
+                    result=run(self.path,'weibo',self.profile,self.store,resume=True)
+                    self.assertEqual(result['state'],'pending')
+                    self.assertEqual(self.store.db.execute('SELECT count(*) FROM account_locks WHERE job_key=?',(self.key,)).fetchone()[0],0)
+                    native['media_id']='87654321'
+                    with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True)
+                    native['media_id']='12345678'
+                    self.page.pending=True
+                    with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True)
+                    self.page.pending=False
+                    self.page.document['title']='other author edit'
+                    with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True)
+                self.assertEqual(marker.read_bytes(),before)
+                self.assertEqual(len(self.page.selected),1);self.assertEqual(self.page.filled,1)
+
+    def test_wrong_cover_direction_rejects_before_native_platform_upload(self):
+        source=self.root/'cover.png';source.write_bytes(b'cover')
+        self.manifest['assets'].append(dict(id='cover',kind='image',path='cover.png'))
+        target=self.manifest['targets'][0];target['asset_ids']=['video','cover'];target['cover_asset_id']='cover'
+        validate(self.manifest,sealing=True);write_json(self.path,self.manifest)
+        self.key=self.store.prepare(self.manifest,'weibo')['key'];self.store.authorize(self.manifest,'weibo','offline prefill')
+        meta=dict(width=720,height=1280,duration=4.0)
+        with patch.object(engine.video_probe,'inspect',return_value=meta),\
+             patch.object(engine.video,'observe_source',return_value=dict(meta,media_id='12345678')),\
+             patch.object(engine.cover,'prepare',return_value=dict(width=1600,height=900)),\
+             patch.object(engine.cover,'upload',return_value={}),patch.object(engine.cover,'observe'):
+            with self.assertRaisesRegex(PublishError,'方向不符'):run(self.path,'weibo',self.profile,self.store)
+        self.assertEqual(self.page.selected,[]);self.assertEqual(self.page.filled,0)
 
 
 if __name__=='__main__':unittest.main()

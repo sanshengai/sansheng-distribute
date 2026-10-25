@@ -62,7 +62,7 @@ NATIVE_SOURCE = '''async()=>{
 }'''
 
 
-def observe_source(page, asset, saved):
+def observe_source(page, asset, saved, *, cover_editing=False):
     """Read the native SDK's current File and media ID, without invoking it.
 
     The DOM success label alone also exists in hidden templates and is
@@ -73,7 +73,12 @@ def observe_source(page, asset, saved):
         raise PublishError('微博视频源绑定或上传记录不完整')
     cloud = cloud_receipt(saved.get('upload_events'), saved['source_size'])
     try:
-        if not page.evaluate(READY):raise ValueError('completion not visible')
+        if cover_editing:
+            if saved.get('state')!='cover_selected':raise ValueError('not the pre-completion cover stage')
+            if not page.evaluate('''()=>[...document.querySelectorAll('.cropper-canvas > img')].filter(n=>
+              n.getBoundingClientRect().width>0&&n.complete&&n.naturalWidth>0).length===1'''):
+                raise ValueError('native cover editor not visible')
+        elif not page.evaluate(READY):raise ValueError('completion not visible')
         native = page.evaluate(NATIVE_SOURCE)
     except Exception as exc:
         raise PublishError('微博原生上传器状态无法完整只读核对；不重传') from exc

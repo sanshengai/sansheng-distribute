@@ -29,6 +29,28 @@ class Cover(unittest.TestCase):
         for value in [dict(width=1200,height=900),dict(width=0,height=0),dict(width=8192,height=4608)]:
             page.result=value
             with self.assertRaises(PublishError):cover.prepare(page,self.asset)
+        page.result=dict(width=675,height=900)
+        self.assertEqual(cover.prepare(page,self.asset)['width'],675)
+
+    def test_landscape_and_portrait_cover_must_match_video_before_upload(self):
+        cover.check_video_ratio(self.prepared,dict(width=1920,height=1080))
+        portrait=dict(self.prepared,width=675,height=900)
+        cover.check_video_ratio(portrait,dict(width=720,height=1280))
+        for image,video in [(self.prepared,dict(width=720,height=1280)),
+                            (portrait,dict(width=1920,height=1080)),
+                            (self.prepared,dict(width=1080,height=1080))]:
+            with self.assertRaises(PublishError):cover.check_video_ratio(image,video)
+
+    def test_partial_cover_requires_exact_source_and_no_completion_request(self):
+        class Page:
+            value=self.crop
+            def evaluate(inner,*args):return inner.value
+        page=Page();saved=dict(prepared=self.prepared,requests=[],responses=[],errors=[])
+        self.assertEqual(cover.incomplete(page,self.asset,self.prepared,saved)['stage'],'cover_editing_required')
+        for key,value in [('requests',[{}]),('responses',[{}]),('errors',['unknown']),('prepared',{})]:
+            with self.assertRaises(PublishError):cover.incomplete(page,self.asset,self.prepared,dict(saved,**{key:value}))
+        page.value=dict(self.crop,source_sha256='b'*64)
+        with self.assertRaises(PublishError):cover.incomplete(page,self.asset,self.prepared,saved)
 
     def test_changed_source_or_native_cropping_stops_before_complete(self):
         cover.verify_crop(self.crop,self.prepared)

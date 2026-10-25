@@ -11,6 +11,7 @@ import weibo_browser as home
 import weibo_video_upload as video
 import weibo_video_fields as fields
 import weibo_video_cover as cover
+import video_probe
 
 
 def assets_for_resume(pack,request_path):
@@ -68,6 +69,14 @@ def dispatch(request_path,action,profile,lock_fd):
                 with os.fdopen(fd,'w') as out:json.dump(saved,out);out.flush();os.fsync(out.fileno())
                 def progress(phase,extra=None):
                     saved.update(extra or {});saved['state']=phase;write_json(marker,saved)
+                local_video=None;prepared=None;image=None
+                if pack['cover_asset_id']:
+                    # Local blank-page decode precedes every native platform upload.
+                    local_video=video_probe.inspect(page,item)
+                    image=next(a for a in assets if a['id']==pack['cover_asset_id'])
+                    prepared=cover.prepare(page,image)
+                    cover.check_video_ratio(prepared,local_video)
+                    progress('local_media_verified',{'local_video':local_video})
                 page.goto(video.CREATOR,wait_until='domcontentloaded',timeout=25000)
                 page.locator(video.BUTTON).wait_for(state='visible',timeout=20000)
                 video.assert_identity(page,identity);home.assert_no_warning(page)
@@ -75,10 +84,6 @@ def dispatch(request_path,action,profile,lock_fd):
                         or not page.locator('input[type=file]').evaluate_all('(ns)=>ns.every(n=>!n.files.length)')
                         or not page.locator('video').evaluate_all('(ns)=>ns.every(n=>!n.currentSrc&&!n.getAttribute("src")&&n.readyState===0)')):
                     raise PublishError('微博新视频窗口已有内容或媒体；不覆盖')
-                prepared=None;image=None
-                if pack['cover_asset_id']:
-                    image=next(a for a in assets if a['id']==pack['cover_asset_id'])
-                    prepared=cover.prepare(page,image)  # decode and check 16:9 BEFORE video upload
                 def checkpoint(events,errors):
                     saved.update(upload_events=events,upload_errors=errors);write_json(marker,saved)
                 capture=video.Capture(checkpoint);page.on('response',capture.response)
@@ -87,7 +92,10 @@ def dispatch(request_path,action,profile,lock_fd):
                     video.select_once(page,item,progress)
                     page.wait_for_function(video.READY,timeout=120000,polling=250)
                     video.assert_identity(page,identity);home.assert_no_warning(page)
-                    progress('video_verified',{'native_video':video.observe_source(page,item,saved)})
+                    native=video.observe_source(page,item,saved)
+                    if local_video and any(native[k]!=local_video[k] for k in ('width','height','duration')):
+                        raise PublishError('微博原生视频元数据与本地检查不符；不继续填写')
+                    progress('video_verified',{'native_video':native})
                     fields.fill(page,pack,progress)
                     if image is not None:
                         def cover_progress(phase,value):progress(phase,{'cover':value})
@@ -97,7 +105,24 @@ def dispatch(request_path,action,profile,lock_fd):
         else:
             page=select_page(connection,'weibo',target_id=saved['target_id'],path='/upload/channel')
             video.assert_identity(page,identity);home.assert_no_warning(page)
-            assets=assets_for_resume(pack,request_path);verify(page,pack,assets,saved)
+            assets=assets_for_resume(pack,request_path)
+            if saved.get('state')=='cover_selected' and pack['cover_asset_id']:
+                if not page.locator('input[type=file]').evaluate_all('(ns)=>ns.every(n=>!n.files.length)'):
+                    raise PublishError('微博未完成封面存在新增待处理文件；保留原稿')
+                image=next(a for a in assets if a['id']==pack['cover_asset_id'])
+                prepared=cover.prepare(page,image)
+                partial=cover.incomplete(page,image,prepared,saved.get('cover'))
+                item=next(a for a in assets if a['kind']=='video')
+                native=video.observe_source(page,item,saved,cover_editing=True)
+                if saved.get('native_video')!=native:raise PublishError('微博未完成封面的视频身份已变')
+                fields.observe(page,pack,cover_editing=True)
+                result={k:pack[k] for k in ('manifest_digest','target_id','platform','account')}
+                result.update(state='pending',remote_id='browser-editor:'+saved['target_id'],remote_url=page.url,
+                    observed_account_identity=identity,tracking_scope='chrome_session_only',
+                    platform_draft_saved=False,final_click_available=False,content_verified=False,
+                    author_action='核对原编辑器与封面方向；需换素材时交回制作端重新封存，不重传已完成目标',**partial)
+                return result
+            verify(page,pack,assets,saved)
         video.assert_identity(page,identity);home.assert_no_warning(page)
         result={k:pack[k] for k in ('manifest_digest','target_id','platform','account')}
         result.update(state='pending' if action=='execute' else 'prefill_ready',
