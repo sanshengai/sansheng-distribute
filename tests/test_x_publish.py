@@ -182,11 +182,13 @@ class XPublicationTests(unittest.TestCase):
         def invoke(config,action,path,*,lock_fd):
             self.actions.append(action);return engine.dispatch(path,action,self.profile,lock_fd)
         patch('publish_core.invoke',side_effect=invoke).start()
-        def click(page,button):
+        def click(page,button,*,before_input=None):
             receipt=read_json(engine.marker_path(self.request))
             observation=dict(durable_attempt=bool(receipt.get('submission_attempted_at')),
                              core_state=self.store.status(self.key)['state'])
             self.click_observations.append(observation)
+            before_input()
+            observation['native_input_checkpoint']=bool(read_json(engine.marker_path(self.request)).get('native_input_checkpointed_at'))
             page.clicks+=1
             if self.send_mode=='no_receipt':return
             value=tweet(self.page.text)
@@ -202,7 +204,7 @@ class XPublicationTests(unittest.TestCase):
         run(self.path,'x',self.profile,self.store,resume=True)
         self.assertEqual(self.page.clicks,1);self.assertEqual(self.actions,['execute','verify','verify'])
         self.assertEqual(len(self.page.writes),1)
-        self.assertEqual(self.click_observations,[dict(durable_attempt=True,core_state='submission_unknown',
+        self.assertEqual(self.click_observations,[dict(durable_attempt=True,core_state='submission_unknown',native_input_checkpoint=True,
                                                       accepted_id='123456789')])
 
     def test_lost_click_reply_still_saves_acceptance_before_return(self):
@@ -252,7 +254,20 @@ class XPublicationTests(unittest.TestCase):
             write_json(path, value)
         with patch.object(publisher,'write_json',side_effect=persist):
             with self.assertRaisesRegex(OSError,'durable store'):run(self.path,'x',self.profile,self.store)
+        publisher.click_background.assert_not_called()
+        self.assertEqual(self.click_observations,[])
         self.assertEqual(self.page.clicks,0)
+        with self.assertRaisesRegex(PublishError,'受理身份'):run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual(self.page.clicks,0)
+
+    def test_pre_input_rejection_is_diagnosed_without_claiming_native_click_or_retry(self):
+        with patch.object(publisher,'click_background',side_effect=PublishError('target is obscured')):
+            with self.assertRaisesRegex(PublishError,'原生点击前'):run(self.path,'x',self.profile,self.store)
+        saved=read_json(engine.marker_path(self.request))
+        self.assertEqual(saved['click_error_phase'],'before_native_input')
+        self.assertEqual(saved['click_error'],'target is obscured')
+        self.assertNotIn('native_input_checkpointed_at',saved)
+        self.assertNotIn('click_reply_unknown',saved)
         with self.assertRaisesRegex(PublishError,'受理身份'):run(self.path,'x',self.profile,self.store,resume=True)
         self.assertEqual(self.page.clicks,0)
 

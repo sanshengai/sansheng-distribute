@@ -34,11 +34,22 @@ def submit_once(page, pack, identity, saved, marker):
 
     capture = x_post.Capture(pack, identity, accepted)
     page.on('response', capture.response)
+    def before_input():
+        # A checkpoint means input may happen next, never that X accepted it.
+        saved['native_input_checkpointed_at'] = time.time()
+        write_json(marker, saved)
     try:
         ready()
         try:
-            click_background(page, button)
-        except Exception:
+            click_background(page, button, before_input=before_input)
+        except Exception as exc:
+            saved['click_error_type'] = type(exc).__name__
+            saved['click_error_phase'] = ('native_input_uncertain' if saved.get('native_input_checkpointed_at')
+                                         else 'before_native_input')
+            if isinstance(exc, PublishError):
+                saved['click_error'] = str(exc)[:300]
+            if saved['click_error_phase'] == 'before_native_input':
+                raise PublishError('X 原生点击前检查未完成；保留同一稿，不自动重试') from exc
             saved['click_reply_unknown'] = True
         deadline = time.monotonic() + 20
         while capture.accepted is None and capture.error is None and time.monotonic() < deadline:
@@ -87,7 +98,7 @@ def dispatch(request_path, action, profile, lock_fd):
         anchor = engine.select_page(connection, 'x', path='/home')
         if action == 'execute':
             with background_window(anchor, cdp_url=endpoint, retain=True) as page:
-                saved = dict(bound, target_id=engine.target_id(page), state='owned_window_opened')
+                saved = dict(bound, target_id=engine.target_id(page), state='owned_window_opened', submission_protocol=2)
                 fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, 'w') as out:
                     json.dump(saved, out); out.flush(); os.fsync(out.fileno())

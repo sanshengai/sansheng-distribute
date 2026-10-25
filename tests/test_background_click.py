@@ -44,5 +44,22 @@ class BackgroundClickTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):click_background(self.page,Node([self.good,self.good]))
         self.assertEqual(len(self.page.clicks),1)
 
+    def test_checkpoint_runs_after_guards_and_before_native_input(self):
+        observations=[]
+        def checkpoint():observations.append(list(self.page.clicks))
+        click_background(self.page,Node([self.good,self.good]),before_input=checkpoint)
+        self.assertEqual(observations,[[]]);self.assertEqual(len(self.page.clicks),1)
+
+    def test_obstruction_does_not_claim_input_checkpoint(self):
+        observations=[]
+        with self.assertRaises(PublishError):
+            click_background(self.page,Node([dict(self.good,ready=False)]),before_input=lambda:observations.append(True))
+        self.assertEqual(observations,[]);self.assertEqual(self.page.clicks,[])
+
+    def test_checkpoint_write_failure_prevents_native_input(self):
+        def fail():raise OSError('checkpoint cannot persist')
+        with self.assertRaises(OSError):click_background(self.page,Node([self.good,self.good]),before_input=fail)
+        self.assertEqual(self.page.clicks,[])
+
 
 if __name__=='__main__':unittest.main()

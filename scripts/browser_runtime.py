@@ -239,7 +239,7 @@ CLICK_TARGET = '''node => {
 }'''
 
 
-def click_background(page, node):
+def click_background(page, node, *, before_input=None):
     """One native pointer click after two stable, unobscured observations.
 
     Locator.click waits for animation frames, which Chrome can suspend in a
@@ -258,6 +258,8 @@ def click_background(page, node):
     second=node.evaluate(CLICK_TARGET)
     if second!=first or second.get('ready') is not True:
         raise PublishError('后台点击目标尚未稳定；不点击或切到前台重试')
+    if before_input is not None:
+        before_input()
     page.mouse.click(second['x'],second['y'])
 
 
