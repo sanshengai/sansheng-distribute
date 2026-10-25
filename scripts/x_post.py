@@ -7,7 +7,7 @@ from __future__ import annotations
 import html
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from browser_runtime import background_tab, render_background_page
 from publish_core import PublishError, digest
@@ -82,20 +82,29 @@ def facts(result):
     entity_media = legacy.get('entities', {}).get('media', [])
     if not isinstance(media, list) or not isinstance(entity_media, list):
         raise PublishError('X 原生媒体列表无效')
-    attachments = []
+    attachments = []; photo_urls = []
     for item in media:
         if not isinstance(item, dict):
             raise PublishError('X 原生附件身份无效')
         original = item.get('original_info', {})
-        attachments.append(dict(media_id=item.get('id_str'), media_key=item.get('media_key'),
-            type=item.get('type'), width=original.get('width'), height=original.get('height'),
-            duration_millis=item.get('video_info', {}).get('duration_millis'),
-            availability=item.get('ext_media_availability', {}).get('status')))
+        native = dict(media_id=item.get('id_str'), media_key=item.get('media_key'),
+            type=item.get('type'), width=original.get('width'), height=original.get('height'))
+        if item.get('type') == 'photo':
+            if (item.get('video_info') or item.get('ext_media_availability', {}).get('status')
+                    not in {None, 'Available'}):
+                raise PublishError('X 原生图片不可用或出现未交接视频')
+            photo_source(item.get('media_url_https'))
+            photo_urls.append(item['media_url_https'])
+        else:
+            native.update(duration_millis=item.get('video_info', {}).get('duration_millis'),
+                          availability=item.get('ext_media_availability', {}).get('status'))
+        attachments.append(native)
     # Ordinary media tweets append one transport URL. Remove only the exact
     # native entity at the UTF-16 tail, never an authored URL or arbitrary suffix.
     chosen_media = entities.get('media', []) if isinstance(entities, dict) else []
     if chosen_media:
-        if not isinstance(chosen_media, list) or len(chosen_media) != 1 or len(media) != 1:
+        if (not isinstance(chosen_media, list) or not 1 <= len(media) <= 4
+                or len(chosen_media) not in {1, len(media)}):
             raise PublishError('X 附件正文实体尚不支持或不能唯一核对')
         item = chosen_media[0]
         try:
@@ -104,8 +113,10 @@ def facts(result):
                     or end != len(encoded)//2 or not re.fullmatch(r'https://t\.co/[A-Za-z0-9]+', url)
                     or encoded[start*2:end*2].decode('utf-16-le') != url
                     or encoded[(start-1)*2:start*2] != b' \x00'
-                    or item.get('id_str') != media[0].get('id_str')
-                    or item.get('media_key') != media[0].get('media_key')):
+                    or any(chosen.get('id_str') != original.get('id_str')
+                           or chosen.get('media_key') != original.get('media_key')
+                           or chosen.get('url') != url or chosen.get('indices') != [start, end]
+                           for chosen, original in zip(chosen_media, media))):
                 raise ValueError()
             text = encoded[:(start-1)*2].decode('utf-16-le')
         except (KeyError, TypeError, ValueError, UnicodeError, AttributeError) as exc:
@@ -115,6 +126,7 @@ def facts(result):
                 url_mappings=[dict(url=e['url'], expanded_url=e['expanded_url']) for e in entities.get('urls', [])],
                 media_count=max(len(media), len(entity_media)),
                 media=attachments,
+                photo_urls=photo_urls,
                 protected=protected, reply_to=legacy.get('in_reply_to_status_id_str'),
                 quoted=legacy.get('is_quote_status'),
                 reposted=bool(legacy.get('retweeted_status_result')),
@@ -134,6 +146,12 @@ def verify_facts(value, pack, identity, *, remote_id=None, author_id=None, expec
         check_publication_media(pack, expected_media)
         if value['media_count'] != 1 or value.get('media') != [expected_media['native']]:
             raise PublishError('X 已发布视频身份、尺寸、时长或可用状态与原片回执不符')
+    elif pack.get('content_type') == 'images':
+        check_publication_media(pack, expected_media)
+        if (value['media_count'] != len(expected_media)
+                or value.get('media') != [r['native'] for r in expected_media]
+                or len(value.get('photo_urls', [])) != len(expected_media)):
+            raise PublishError('X 已发布图片身份、尺寸或次序与原图上传回执不符')
     elif value['media_count'] or expected_media is not None:
         raise PublishError('X 普通公开文字帖出现未交接媒体')
     return value
@@ -141,6 +159,23 @@ def verify_facts(value, pack, identity, *, remote_id=None, author_id=None, expec
 
 def check_publication_media(pack, expected):
     """Bind a processed native video to this immutable asset, not just a count."""
+    if pack.get('content_type') == 'images':
+        try:
+            assets = pack['assets']
+            if not isinstance(expected, list) or not 1 <= len(expected) == len(assets) <= 4:
+                raise ValueError()
+            for asset, row in zip(assets, expected):
+                native = row['native']
+                if (row['source_asset_id'] != asset['id'] or row['source_sha256'] != asset['sha256']
+                        or not isinstance(native['media_id'], str)
+                        or not re.fullmatch(r'[0-9]{1,32}', native['media_id'])
+                        or native['media_key'] != '3_' + native['media_id'] or native['type'] != 'photo'
+                        or any(type(native[k]) is not int or not 0 < native[k] <= 4096
+                               for k in ('width', 'height'))): raise ValueError()
+            if len({r['native']['media_id'] for r in expected}) != len(assets): raise ValueError()
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise PublishError('X 图文发布缺少与封存原图绑定的媒体证据') from exc
+        return
     try:
         assets = pack['assets']; native = expected['native']
         if (pack['content_type'] != 'video' or len(assets) != 1
@@ -154,6 +189,24 @@ def check_publication_media(pack, expected):
             raise ValueError()
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise PublishError('X 视频发布缺少与封存原片绑定的媒体证据') from exc
+
+
+def photo_source(url):
+    """Native photo CDN identity, allowing only format/size presentation queries."""
+    try:
+        u = urlsplit(url); query = parse_qs(u.query, keep_blank_values=True)
+        match = re.fullmatch(r'/media/([A-Za-z0-9_-]+)(?:\.(jpg|jpeg|png|webp))?', u.path)
+        if (u.scheme != 'https' or u.netloc != 'pbs.twimg.com' or u.fragment or not match
+                or set(query) - {'format', 'name'} or any(len(v) != 1 for v in query.values())):
+            raise ValueError()
+        fmt = match[2] or query.get('format', [None])[0]
+        if (fmt not in {'jpg', 'jpeg', 'png', 'webp'}
+                or ('format' in query and query['format'][0] != fmt)
+                or ('name' in query and not re.fullmatch(r'[a-zA-Z0-9_]{1,32}', query['name'][0]))):
+            raise ValueError()
+        return match[1], fmt
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise PublishError('X 可见图片或原生图片地址无法核对') from exc
 
 
 class Capture:
@@ -176,8 +229,9 @@ class Capture:
                 raise PublishError('X 原生投稿返回错误；不重复点击')
             result = body['data']['create_tweet']['tweet_results']['result']
             value = acceptance_identity(result, self.identity)
-            self.accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
-            self.save(self.accepted)
+            accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
+            self.save(accepted)
+            self.accepted = accepted
         except Exception:
             self.error = 'X 原生受理回执未能完整核对或保存；保持未知，不重复点击'
 
@@ -254,6 +308,21 @@ def readback(anchor, pack, identity, accepted, *, expected_media=None):
                 if (players.count() != 1 or not players.is_visible()
                         or article.locator('[data-testid="tweetPhoto"]').count()):
                     raise PublishError('X 原视频页没有唯一可见播放器或出现额外图片')
+            elif pack.get('content_type') == 'images':
+                photos = article.locator('[data-testid="tweetPhoto"]')
+                if (photos.count() != len(expected_media)
+                        or article.locator('video,[data-testid="videoPlayer"]').count()):
+                    raise PublishError('X 原图文页图片数量不符或出现额外视频')
+                actual = []
+                for photo in photos.all():
+                    if not photo.is_visible(): raise PublishError('X 原图文页存在不可见图片')
+                    images = photo.locator('img').evaluate_all(
+                        'ns=>ns.map(n=>({src:n.currentSrc,loaded:n.complete&&n.naturalWidth>0}))')
+                    if len(images) != 1 or images[0].get('loaded') is not True:
+                        raise PublishError('X 原图文页图片未完整加载或不能唯一核对')
+                    actual.append(photo_source(images[0]['src']))
+                if actual != [photo_source(u) for u in values[0]['photo_urls']]:
+                    raise PublishError('X 原图文页可见图片来源或次序与原生详情不符')
             elif article.locator('[data-testid="tweetPhoto"],video,[data-testid="videoPlayer"]').count():
                 raise PublishError('X 文字帖原生作品页出现未交接媒体')
             visible_matches += 1

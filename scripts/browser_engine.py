@@ -49,15 +49,15 @@ def check_pack(pack):
         return check_weibo(pack, publishing=pack['endpoint'] == 'publish')
     if (pack['platform'] != 'x' or pack['endpoint'] not in {'prefill', 'publish'}
             or pack['content_type'] not in {'text','images','video'}):
-        raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text/video:publish 候选')
-    if pack['endpoint'] == 'publish' and pack['content_type'] == 'images':
-        raise PublishError('X 图片发送尚未接入；不能静默转为纯文字')
+        raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text/images/video:publish 候选')
     document = pack['document']
     if (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
         raise PublishError('当前 X 引擎不承接文章、独立封面、字幕或平台扩展字段')
     if pack['content_type']=='images':
         from x_images import check
         check(pack)
+        if pack['endpoint'] == 'publish' and len({a['sha256'] for a in pack['assets']}) != len(pack['assets']):
+            raise PublishError('X 图片发送不能唯一绑定重复原图；交回制作端明确素材')
     elif pack['content_type']=='video':
         from x_video import check
         check(pack)

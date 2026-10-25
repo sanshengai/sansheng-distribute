@@ -170,11 +170,11 @@ class BrowserEngineTests(unittest.TestCase):
             with self.assertRaises(PublishError):engine.check_pack(build_pack(manifest,'x',self.profile))
         self.assertEqual(self.page.writes,[]);self.assertEqual(self.actions,[])
 
-    def test_images_publish_refused_without_browser_connection(self):
+    def test_empty_images_publish_refused_without_browser_connection(self):
         from platform_pack import build_pack
         pack=build_pack(self.manifest,'x',self.profile)
         for content_type in ('images',):
-            with self.subTest(content_type=content_type), self.assertRaisesRegex(PublishError,'图片发送尚未接入'):
+            with self.subTest(content_type=content_type), self.assertRaisesRegex(PublishError,'一至四张'):
                 engine.check_pack(dict(pack,endpoint='publish',content_type=content_type))
         self.assertEqual(self.actions,[])
 

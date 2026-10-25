@@ -197,6 +197,18 @@
         }
       ],
       "adoption": "Observed native route, delayed SDK binding, detached video chooser, current File and cloud receipts, separate creation/content declarations, paired plain-text topics, cover crop and upload PID contract. Independent bundled video prefill and read-only recovery validated; no frontend source vendored and no public submission capability claimed."
+    },
+    {
+      "platform": "x_images_upload",
+      "reviewed_at": "2026-10-26",
+      "creator_url": "https://x.com/compose/post",
+      "assets": [
+        {
+          "url": "https://abs.twimg.com/responsive-web/client-web/shared~JetfuelWrapper~bundle.AccountVerification~bundle.AudioSpaceAnalytics~bundle.AudioSpaceDetail~bundle.Au.2918eb976a087d8aa.js",
+          "sha256": "c87988b2ee200bb8c4420cc9ed763041abd6bb99b19ce25e6bc1fe84fe745562"
+        }
+      ],
+      "adoption": "Read already-loaded native SDK source: upload.json/upload2.json, INIT/APPEND/APPENDMULTI/FINALIZE/STATUS, multipart media, segment indexes/checksum, INIT media identity and native processing. Independently implemented passive chunk-to-sealed-source verification; no SDK code vendored, no private request constructed/replayed. New photo upload and publication remain unverified in live platform."
     }
   ]
 }
