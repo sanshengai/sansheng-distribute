@@ -64,8 +64,9 @@ def return_to_write(store, key, profile, article_dir, write_scripts):
                        verification_nonce=secrets.token_hex(16),
                        document_snapshot_path=str(store.directory/'snapshots'/f'{key}.documents.json'))
         write_json(request_path,request)
-        observation = invoke(adapter_config(profile,target,readonly=True),'verify',request_path,lock_fd=stream.fileno())
-        store.save_observation(key,observation,verified=True)
+        with store.measure(key,'verify'):
+            observation = invoke(adapter_config(profile,target,readonly=True),'verify',request_path,lock_fd=stream.fileno())
+            store.save_observation(key,observation,verified=True)
         if observation.get('state') != 'draft_ready':
             raise PublishError('草稿尚未完成媒体/视觉核验，不能回传成功')
         raw = read_json(request_path.with_suffix('.readback.json'))

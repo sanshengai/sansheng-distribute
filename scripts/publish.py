@@ -18,6 +18,8 @@ def main():
     p = sub.add_parser('preflight', help='仅做本地依赖、账号配置与素材检查，不请求 token、不上传')
     p.add_argument('manifest'); p.add_argument('--target', required=True)
     p = sub.add_parser("status"); p.add_argument("--key")
+    p = sub.add_parser('metrics', help='只读查询同一账本的执行/核验耗时；不重跑或上传')
+    p.add_argument('--key', required=True)
     p = sub.add_parser("return-write", help="只读重验既有草稿并生成 Write 回传凭证；不上传或新建")
     p.add_argument("key"); p.add_argument("--article-dir", required=True); p.add_argument("--write-scripts", required=True)
     p = sub.add_parser("resume-job", help="源文件或交接清单丢失时，按账本 key 只读恢复")
@@ -69,6 +71,8 @@ def main():
                                           resume=args.action == "batch-resume", max_parallel=args.max_parallel)
             elif args.action == "status":
                 result = store.status(args.key)
+            elif args.action == 'metrics':
+                result = store.metrics(args.key)
             elif args.action == "return-write":
                 from write_bridge import return_to_write
                 result = return_to_write(store,args.key,load_profile(args.profile),args.article_dir,args.write_scripts)

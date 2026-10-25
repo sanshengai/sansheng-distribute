@@ -11,6 +11,7 @@ import signal
 import sqlite3
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -313,6 +314,11 @@ class Store:
           CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY, job_key TEXT NOT NULL, state TEXT NOT NULL,
             data TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS timings (
+            id INTEGER PRIMARY KEY, job_key TEXT NOT NULL,
+            phase TEXT NOT NULL CHECK(phase IN ('preflight','execute','continue','verify')),
+            outcome TEXT NOT NULL CHECK(outcome IN ('completed','failed')),
+            elapsed_ns INTEGER NOT NULL CHECK(elapsed_ns >= 0), started_at TEXT NOT NULL);
         ''')
 
     def close(self):
@@ -372,6 +378,41 @@ class Store:
                 raise PublishError("任务尚未 prepare")
             return dict(row)
         return [dict(x) for x in self.db.execute("SELECT * FROM jobs ORDER BY updated_at DESC")]
+
+    @contextmanager
+    def measure(self, key, phase):
+        """Private best-effort timing; never supersedes a durable remote ID/error."""
+        if phase not in {'preflight','execute','continue','verify'}:
+            raise PublishError('未知计量阶段')
+        self.status(key)
+        started_at, started = now(), time.monotonic_ns()
+        outcome = 'failed'
+        try:
+            yield
+            outcome = 'completed'
+        finally:
+            elapsed = max(0, time.monotonic_ns() - started)
+            try:
+                with self.tx():
+                    self.db.execute('INSERT INTO timings(job_key,phase,outcome,elapsed_ns,started_at) VALUES (?,?,?,?,?)',
+                                    (key, phase, outcome, elapsed, started_at))
+            except sqlite3.Error:
+                # Telemetry is not a dispatch gate. A missing sample is unknown,
+                # never zero time; accepted IDs must already have been saved.
+                pass
+
+    def metrics(self, key):
+        self.status(key)
+        rows = [dict(r) for r in self.db.execute(
+            'SELECT phase,outcome,elapsed_ns,started_at FROM timings WHERE job_key=? ORDER BY id', (key,))]
+        phases = {}
+        for row in rows:
+            value = phases.setdefault(row['phase'], dict(samples=0, completed=0, failed=0, elapsed_ns=0))
+            value['samples'] += 1; value[row['outcome']] += 1; value['elapsed_ns'] += row['elapsed_ns']
+        return dict(key=key, sample_count=len(rows), phases=phases, samples=rows,
+                    scope='core_preflight_and_adapter_action_with_observation_persistence',
+                    unmeasured=['agent_operations','screenshots','human_intervention',
+                                'upload_vs_transcode_breakdown','historical_runs_before_instrumentation'])
 
     def authorize(self, manifest, ident, statement):
         _nonempty(statement, "实际用户授权原话")
@@ -655,35 +696,41 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if not isinstance(command,list) or not command or not all(isinstance(x,str) for x in command):
             raise PublishError('未配置经验证的媒体接力器')
         write_json(request_path,request)
-        observation=invoke(config,'verify',request_path,lock_fd=lock_fd)
-        store.save_observation(key,observation,verified=True)
+        with store.measure(key,'verify'):
+            observation=invoke(config,'verify',request_path,lock_fd=lock_fd)
+            store.save_observation(key,observation,verified=True)
         if observation.get('state')=='draft_ready': return store.status(key)
         if observation.get('state')!='pending' or observation.get('stage') not in {'native_media_insertion_required','visual_review_required','external_link_repair_required'}:
             raise PublishError('当前草稿不在可补媒体阶段；先核对差异')
         request['job']=store.status(key); request['continuation']=observation; write_json(request_path,request)
         store.begin(manifest,ident,continuing=True)
-        response=invoke(config,'continue',request_path,lock_fd=lock_fd)
-        store.save_observation(key,dict(response,state='pending'),verified=False)
+        with store.measure(key,'continue'):
+            response=invoke(config,'continue',request_path,lock_fd=lock_fd)
+            store.save_observation(key,dict(response,state='pending'),verified=False)
         request['job']=store.status(key); write_json(request_path,request)
-        observation=invoke(config,'verify',request_path,lock_fd=lock_fd)
-        return store.save_observation(key,observation,verified=True)
+        with store.measure(key,'verify'):
+            observation=invoke(config,'verify',request_path,lock_fd=lock_fd)
+            return store.save_observation(key,observation,verified=True)
     if not resume:
         if not advance:
-            preflight(manifest, ident, profile)
+            with store.measure(key,'preflight'):
+                preflight(manifest, ident, profile)
         # Prepare all fallible local writes before claiming the remote mutation window.
         write_json(request_path, request)
         store.begin(manifest, ident)
-        response = invoke(config, "execute", request_path, lock_fd=lock_fd)
-        if response.get("remote_id"):
-            # Persist accepted ID before verification, even if execute claims success.
-            pending = dict(response, state="pending")
-            store.save_observation(key, pending, verified=False)
+        with store.measure(key,'execute'):
+            response = invoke(config, "execute", request_path, lock_fd=lock_fd)
+            if response.get("remote_id"):
+                # Persist accepted ID before telemetry or verification.
+                pending = dict(response, state="pending")
+                store.save_observation(key, pending, verified=False)
     elif job["state"] == "prepared":
         raise PublishError("尚未执行，请使用 run")
     request["job"] = store.status(key)
     write_json(request_path, request)
-    observation = invoke(config, "verify", request_path, lock_fd=lock_fd)
-    if recover_remote_id is not None and (observation.get('remote_id') != recover_remote_id
-            or observation.get('recovery_verified') is not True):
-        raise PublishError('候选草稿未经官方正文与封面核验，保持未知提交状态')
-    return store.save_observation(key, observation, verified=True)
+    with store.measure(key,'verify'):
+        observation = invoke(config, "verify", request_path, lock_fd=lock_fd)
+        if recover_remote_id is not None and (observation.get('remote_id') != recover_remote_id
+                or observation.get('recovery_verified') is not True):
+            raise PublishError('候选草稿未经官方正文与封面核验，保持未知提交状态')
+        return store.save_observation(key, observation, verified=True)
