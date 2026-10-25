@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundled bounded browser actions and opt-in X ordinary text submission candidate.
+"""Bundled bounded browser actions and opt-in X ordinary text/video submission candidate.
 
 Editor identities are Chrome session targets, not persistent platform draft IDs.
 Losing that session keeps the result unknown; it never authorizes another fill.
@@ -46,9 +46,9 @@ def check_pack(pack):
         return check_weibo(pack)
     if (pack['platform'] != 'x' or pack['endpoint'] not in {'prefill', 'publish'}
             or pack['content_type'] not in {'text','images','video'}):
-        raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text:publish 候选')
-    if pack['endpoint'] == 'publish' and pack['content_type'] != 'text':
-        raise PublishError('X 图片/视频发送尚未接入；不能静默转为纯文字')
+        raise PublishError('当前 X 引擎承接 text/images/video:prefill 或普通 text/video:publish 候选')
+    if pack['endpoint'] == 'publish' and pack['content_type'] == 'images':
+        raise PublishError('X 图片发送尚未接入；不能静默转为纯文字')
     document = pack['document']
     if (document and document['format'] != 'text') or pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']:
         raise PublishError('当前 X 引擎不承接文章、独立封面、字幕或平台扩展字段')

@@ -10,6 +10,36 @@ import browser_engine as engine
 import x_video
 
 
+def fill(page, pack, assets, identity, saved, marker):
+    """Select once, persist native upload receipts, then fill the sealed copy."""
+    engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
+    file=page.locator(x_video.MODAL+' input[type="file"][data-testid="fileInput"]')
+    accepts=(file.get_attribute('accept') or '').split(',') if file.count()==1 else []
+    if file.count()!=1 or file.is_disabled() or 'video/mp4' not in accepts:
+        raise PublishError('X 原生视频文件入口不能唯一核对或类型改变')
+    def checkpoint(events,errors):
+        saved.update(upload_events=events,upload_errors=errors);write_json(marker,saved)
+    capture=x_video.Capture(checkpoint)
+    page.on('response',capture.response)
+    try:
+        # Native video selection may reset text; do it before filling the copy.
+        engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
+        saved['state']='before_native_selection';write_json(marker,saved)
+        file.set_input_files(checked_path(assets[0]),timeout=15000)
+        page.wait_for_function(x_video.READY,timeout=120000,polling=250)
+        engine.assert_identity(page,identity);engine.assert_no_warning(page)
+        native,cloud=x_video.verify(page,pack,saved)
+        saved.update(native_video=native,cloud_video=cloud,state='cloud_processed');write_json(marker,saved)
+        node=engine.editor(page)
+        if node.inner_text().strip(' \t\r\n\u200b\ufeff'):
+            raise PublishError('X 视频上传后已有其他文字；保留原稿，不覆盖')
+        node.fill(pack['fields']['composed_text'])
+        if node.inner_text()!=pack['fields']['composed_text']:
+            raise PublishError('X 实际视频文案与封存包不符；先只读检查原稿')
+        saved['state']='filled';write_json(marker,saved)
+    finally:page.remove_listener('response',capture.response)
+
+
 def dispatch(request_path,action,profile,lock_fd):
     if action not in {'execute','verify'}:raise PublishError('不支持的浏览器阶段')
     try:os.fstat(lock_fd)
@@ -41,33 +71,7 @@ def dispatch(request_path,action,profile,lock_fd):
                     json.dump(saved,out);out.flush();os.fsync(out.fileno())
                 page.goto('https://x.com/compose/post',wait_until='domcontentloaded',timeout=25000)
                 page.locator(x_video.MODAL+' [data-testid="tweetTextarea_0"]').wait_for(state='visible',timeout=20000)
-                engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
-                file=page.locator(x_video.MODAL+' input[type="file"][data-testid="fileInput"]')
-                accepts=(file.get_attribute('accept') or '').split(',') if file.count()==1 else []
-                if file.count()!=1 or file.is_disabled() or 'video/mp4' not in accepts:
-                    raise PublishError('X 原生视频文件入口不能唯一核对或类型改变')
-                def checkpoint(events,errors):
-                    saved.update(upload_events=events,upload_errors=errors);write_json(marker,saved)
-                capture=x_video.Capture(checkpoint)
-                page.on('response',capture.response)
-                try:
-                    # Native video selection may reset text. Select first, wait
-                    # for cloud processing, then write the sealed full copy.
-                    engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
-                    saved['state']='before_native_selection';write_json(marker,saved)
-                    file.set_input_files(checked_path(assets[0]),timeout=15000)
-                    page.wait_for_function(x_video.READY,timeout=120000,polling=250)
-                    engine.assert_identity(page,identity);engine.assert_no_warning(page)
-                    native,cloud=x_video.verify(page,pack,saved)
-                    saved.update(native_video=native,cloud_video=cloud,state='cloud_processed');write_json(marker,saved)
-                    node=engine.editor(page)
-                    if node.inner_text().strip(' \t\r\n\u200b\ufeff'):
-                        raise PublishError('X 视频上传后已有其他文字；保留原稿，不覆盖')
-                    node.fill(pack['fields']['composed_text'])
-                    if node.inner_text()!=pack['fields']['composed_text']:
-                        raise PublishError('X 实际视频文案与封存包不符；先只读检查原稿')
-                    saved['state']='filled';write_json(marker,saved)
-                finally:page.remove_listener('response',capture.response)
+                fill(page,pack,assets,identity,saved,marker)
         else:
             page=engine.select_page(connection,'x',path='/compose/post',target_id=saved['target_id'])
             engine.assert_identity(page,identity);engine.assert_no_warning(page)

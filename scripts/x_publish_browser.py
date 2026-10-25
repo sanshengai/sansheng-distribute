@@ -1,4 +1,4 @@
-"""Opt-in ordinary X text submission; one native click, same-ID read-only recovery."""
+"""Opt-in ordinary X text/video submission; one native click, same-ID recovery."""
 from __future__ import annotations
 import json
 import os
@@ -11,13 +11,28 @@ from publish_core import PublishError, digest, read_json, write_json
 import x_post
 
 
+def video_evidence(page, pack, saved):
+    import x_video
+    native, cloud = x_video.verify(page, pack, saved)
+    value = dict(source_asset_id=native['source_asset_id'], source_sha256=native['source_sha256'],
+                 native=dict(media_id=cloud['media_id'], media_key=cloud['media_key'], type='video',
+                    width=native['width'], height=native['height'],
+                    duration_millis=round(native['duration']*1000), availability='Available'))
+    x_post.check_publication_media(pack, value)
+    return value
+
+
 def submit_once(page, pack, identity, saved, marker):
     if saved.get('submission_attempted_at') is not None or saved.get('accepted'):
         raise PublishError('X 已有发送尝试；只能独立查询，不再次点击')
 
     def ready():
         engine.assert_identity(page, identity); engine.assert_no_warning(page)
-        engine.assert_no_media(page)
+        if pack['content_type'] == 'video':
+            if saved.get('publication_media') != video_evidence(page, pack, saved):
+                raise PublishError('X 发送前原片云端或预览证据已改变；不发送')
+        else:
+            engine.assert_no_media(page)
         if engine.editor(page).inner_text() != pack['fields']['composed_text']:
             raise PublishError('X 发送前文案已改变；保留原稿，不发送')
 
@@ -80,8 +95,8 @@ def dispatch(request_path, action, profile, lock_fd):
         raise PublishError('账号受限，只准备本地包')
     pack = build_pack(manifest, target['id'], profile, check_files=action == 'execute')
     engine.check_pack(pack)
-    if pack['endpoint'] != 'publish' or pack['content_type'] != 'text':
-        raise PublishError('X 发送候选仅承接普通 text:publish')
+    if pack['endpoint'] != 'publish' or pack['content_type'] not in {'text', 'video'}:
+        raise PublishError('X 发送候选仅承接普通 text/video:publish')
     bound = dict(pack_digest=digest(pack), identity=identity, cdp_url=endpoint, browser_profile=browser)
     marker = engine.marker_path(request_path)
     if action == 'execute' and marker.exists():
@@ -94,11 +109,19 @@ def dispatch(request_path, action, profile, lock_fd):
             raise PublishError('X 缺少完整原生受理身份；保持未知，不重新发送')
         if request['job'].get('remote_id') not in (None, saved['accepted']['remote_id']):
             raise PublishError('X 原作品 ID 与核心账本矛盾')
+        if pack['content_type'] == 'video':
+            x_post.check_publication_media(pack, saved.get('publication_media'))
     with engine.connect(profile, writing=action == 'execute') as connection:
         anchor = engine.select_page(connection, 'x', path='/home')
         if action == 'execute':
+            if pack['content_type'] == 'video':
+                from browser_assets import stage
+                import x_video
+                assets = stage(pack, request_path); size = x_video.prepare(assets[0])
             with background_window(anchor, cdp_url=endpoint, retain=True) as page:
                 saved = dict(bound, target_id=engine.target_id(page), state='owned_window_opened', submission_protocol=2)
+                if pack['content_type'] == 'video':
+                    saved.update(source_size=size, upload_events=[], upload_errors=[])
                 fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, 'w') as out:
                     json.dump(saved, out); out.flush(); os.fsync(out.fileno())
@@ -106,15 +129,21 @@ def dispatch(request_path, action, profile, lock_fd):
                 page.locator('[role="dialog"][aria-modal="true"] [data-testid="tweetTextarea_0"]').wait_for(
                     state='visible', timeout=20000)
                 engine.assert_identity(page, identity); engine.assert_no_warning(page)
-                node = engine.empty_editor(page)
-                node.fill(pack['fields']['composed_text'])
+                if pack['content_type'] == 'video':
+                    from x_video_browser import fill
+                    fill(page, pack, assets, identity, saved, marker)
+                    saved['publication_media'] = video_evidence(page, pack, saved)
+                else:
+                    node = engine.empty_editor(page)
+                    node.fill(pack['fields']['composed_text'])
                 saved['state'] = 'filled'; write_json(marker, saved)
                 value = submit_once(page, pack, identity, saved, marker)
                 return dict({k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')},
                             state='pending', remote_id=value['remote_id'],
                             remote_url=x_post.status_url(identity, value['remote_id']),
                             observed_account_identity=identity, tracking_scope='native_post_id')
-        observed = x_post.readback(anchor, pack, identity, saved['accepted'])
+        observed = x_post.readback(anchor, pack, identity, saved['accepted'],
+                                   expected_media=saved.get('publication_media'))
         write_json(marker.with_suffix('.x-readback.json'), dict(observed, remote_id=saved['accepted']['remote_id']))
         return dict({k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')},
                     **observed, state='published', remote_id=saved['accepted']['remote_id'],

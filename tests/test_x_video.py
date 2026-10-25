@@ -187,7 +187,7 @@ class XVideoDispatchTests(unittest.TestCase):
     def test_unmapped_cover_or_extra_assets_rejected(self):
         pack=build_pack(self.manifest,'x',self.profile)
         for changed in (dict(pack,assets=[]),dict(pack,assets=pack['assets']*2),
-                        dict(pack,platform_metadata={'ai_generated':True}),dict(pack,endpoint='publish')):
+                        dict(pack,platform_metadata={'ai_generated':True})):
             with self.assertRaises(PublishError):engine.check_pack(changed)
         self.assertEqual(self.page.uploads,[])
 
