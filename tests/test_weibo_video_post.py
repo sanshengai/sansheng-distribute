@@ -9,7 +9,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import weibo_video_post as video
-from publish_core import PublishError
+from publish_core import PublishError, digest
+import weibo_video_upload as upload
+import weibo_video_cover as cover
+from test_weibo_video_upload import receipts
 
 UID='1234567890'; RID='9876543210'; VID='8765432109'; BID='Rfixture1'
 PID='fixtureVideoCover'; SHORT='http://t.cn/nativeVideo'
@@ -200,6 +203,91 @@ class NativeObservation(unittest.TestCase):
             if kind=='media':e.raw['data']['video_info']['oid']='1034:111'
             with self.subTest(kind=kind),self.assertRaises(PublishError):self.observe(p,e)
             self.assertTrue(p.closed and e.closed)
+
+
+def source_fixture():
+    pack=dict(platform='weibo',content_type='video',endpoint='publish',cover_asset_id='cover',
+        fields=dict(title='知识图解',composed_text='第一段😀\n\n成套图解'),platform_metadata=dict(creation_type='原创'),
+        assets=[dict(id='video',kind='video',sha256='a'*64,path='gone-video.mp4'),
+                dict(id='cover',kind='image',sha256='b'*64,path='gone-cover.png')])
+    events=receipts()
+    for event in events:
+        for node in (event['fields'],event['body']):
+            if 'media_id' in node:node['media_id']=VID
+    prepared=dict(width=1600,height=900,source_size=7,source_asset_id='cover',source_sha256='b'*64)
+    crop=dict(source_sha256='b'*64,source_size=7,width=1600,height=900,aspect_ratio=16/9,
+        crop=dict(x=0,y=0,width=1600,height=900,rotate=0,scaleX=1,scaleY=1),native_size=100,native_sha256='c'*64)
+    saved=dict(pack_digest=digest(pack),identity=UID,source_sha256='a'*64,source_size=12,
+        upload_events=events,upload_errors=[],native_video=dict(media_id=VID,size=12,chunk_count=2,
+        tracking_scope='native_current_file_and_cloud_receipt',source_sha256='a'*64,source_asset_id='video',
+        width=1920,height=1080,duration=45.95),cover=dict(prepared=prepared,crop=crop,errors=[],
+        requests=[dict(size=100,sha256='c'*64,content_type='application/octet-stream')],
+        responses=[dict(status=200,ret=True,pid=PID)]))
+    public=video.facts(body());observed=dict(public=public,edit=video.edit_facts(edit_body(),public))
+    return pack,dict(identity=UID,remote_id=RID,mblogid=BID),saved,observed
+
+
+class SourceBinding(unittest.TestCase):
+    def bind(self,fixture):return video.bind_sources(fixture[0],UID,*fixture[1:])
+
+    def test_original_and_editor_absent_but_exact_cloud_and_crop_proofs_bind(self):
+        result=self.bind(source_fixture())
+        self.assertTrue(result['source_binding_verified'])
+        self.assertFalse(result['remote_media_bytes_verified'])
+        self.assertEqual([a['asset_id'] for a in result['asset_bindings']],['video','cover'])
+        self.assertNotIn('content_verified',result)
+        self.assertNotIn('state',result)
+
+    def test_missing_prior_native_file_proof_cannot_be_rebuilt_from_public_video(self):
+        for field,value in [('native_video',{}),('upload_events',[]),('upload_errors',['missing']),
+                            ('source_sha256','f'*64),('source_size',0),('pack_digest','wrong'),('identity','111')]:
+            f=source_fixture();f[2][field]=value
+            with self.subTest(field=field),self.assertRaises(PublishError):self.bind(f)
+
+    def test_public_post_and_original_video_must_not_be_interchanged(self):
+        for node,key,value in [('accepted','remote_id','111'),('accepted','identity','111'),('accepted','mblogid','WrongPost'),
+                               ('public','media_id','111'),('public','title','不同标题'),('public','authored_text','不同文案'),
+                               ('edit','remote_id','111'),('edit','duration',46),('edit','width',1280),
+                               ('edit','creation_type','转载')]:
+            f=source_fixture();target={'accepted':f[1],'public':f[3]['public'],'edit':f[3]['edit']}[node];target[key]=value
+            with self.subTest(node=node,key=key),self.assertRaises(PublishError):self.bind(f)
+
+    def test_cloud_media_and_persisted_source_metadata_cannot_diverge(self):
+        for key,value in [('media_id','111'),('source_asset_id','other'),('source_sha256','f'*64),
+                          ('chunk_count',3),('size',13),('tracking_scope','native_cloud_file_accepted_only'),
+                          ('width',False),('duration',float('nan'))]:
+            f=source_fixture();f[2]['native_video'][key]=value
+            with self.subTest(key=key),self.assertRaises(PublishError):self.bind(f)
+        f=source_fixture();f[2]['native_video']['media_id']='12345678'
+        for event in f[2]['upload_events']:
+            for node in (event['fields'],event['body']):
+                if 'media_id' in node:node['media_id']='12345678'
+        with self.assertRaises(PublishError):self.bind(f)
+
+    def test_cover_must_bind_original_crop_upload_pid_and_both_remote_views(self):
+        for change in ('missing','source','crop','upload','public_pid','edit_pid','ratio','dimensions'):
+            f=source_fixture();c=f[2]['cover']
+            if change=='missing':f[2]['cover']=None
+            elif change=='source':c['prepared']['source_sha256']='f'*64
+            elif change=='crop':c['crop']['crop']['x']=1
+            elif change=='upload':c['responses'][0]['pid']='WrongCoverPid'
+            elif change=='public_pid':f[3]['public']['cover_pid']='WrongCoverPid'
+            elif change=='edit_pid':f[3]['edit']['cover_pid']='WrongCoverPid'
+            elif change=='ratio':c['prepared']['width']=675
+            elif change=='dimensions':c['prepared']['width']=True
+            with self.subTest(change=change),self.assertRaises(PublishError):self.bind(f)
+
+    def test_optional_default_cover_not_claimed_as_a_local_asset(self):
+        f=source_fixture();f[0]['cover_asset_id']=None;f[0]['assets']=f[0]['assets'][:1]
+        f[2]['pack_digest']=digest(f[0]);del f[2]['cover']
+        result=self.bind(f);self.assertEqual(len(result['asset_bindings']),1)
+        f[0]['assets'].append(dict(id='extra',kind='image',sha256='b'*64));f[2]['pack_digest']=digest(f[0])
+        with self.assertRaises(PublishError):self.bind(f)
+
+    def test_empty_sources_or_observation_rejected(self):
+        for index,value in [(0,{}),(1,None),(2,{}),(3,{})]:
+            f=list(source_fixture());f[index]=value
+            with self.subTest(index=index),self.assertRaises(PublishError):self.bind(f)
 
 
 if __name__=='__main__':unittest.main()

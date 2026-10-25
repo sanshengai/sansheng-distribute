@@ -247,3 +247,46 @@ def observe_existing(anchor, uid, remote_id, cdp_url):
     return dict(public=public,edit=values[0],visible=visible,observed_at=time.time(),
                 native_detail_digest=digest(raw),native_edit_digest=digest(edits),
                 source_binding_verified=False,remote_media_bytes_verified=False)
+
+
+def bind_sources(pack, uid, accepted, saved, observation):
+    """Bind post/readback identity to prior upload proofs, never mark published.
+
+    A caller still needs actual native submission-input and declaration checks.
+    Do not reconstruct a missing upload proof from the public video or cover.
+    """
+    import weibo_video_upload as upload
+    import weibo_video_cover as cover
+    try:
+        if (pack['platform']!='weibo' or pack['content_type']!='video'
+                or saved.get('pack_digest')!=digest(pack) or saved.get('identity')!=uid
+                or not isinstance(accepted,dict) or accepted.get('identity')!=uid):raise ValueError()
+        post.status_url(uid,accepted.get('remote_id'))
+        public,edit=observation['public'],observation['edit']
+        if (public['identity']!=uid or public['remote_id']!=accepted['remote_id']
+                or public['mblogid']!=accepted.get('mblogid')
+                or edit['remote_id']!=accepted['remote_id'] or edit['media_id']!=public['media_id']
+                or public['title']!=pack['fields']['title'] or edit['title']!=public['title']
+                or pack['fields']['composed_text'] not in (public['text'],public['authored_text'])
+                or edit['creation_type']!=pack['platform_metadata']['creation_type']):raise ValueError()
+        assets=pack['assets'];videos=[a for a in assets if a['kind']=='video'];images=[a for a in assets if a['kind']=='image']
+        if len(videos)!=1 or len(videos)+len(images)!=len(assets):raise ValueError()
+        native=upload.saved_source(videos[0],saved)
+        if (native['media_id']!=public['media_id']
+                or any(edit[k]!=native[k] for k in ('width','height','duration'))
+                or math.floor(native['duration'])!=public['duration']):raise ValueError()
+        bindings=[dict(asset_id=videos[0]['id'],source_sha256=videos[0]['sha256'],native_media_id=native['media_id'])]
+        if pack['cover_asset_id']:
+            if len(images)!=1 or images[0]['id']!=pack['cover_asset_id']:raise ValueError()
+            saved_cover=saved.get('cover');prepared=saved_cover.get('prepared') if isinstance(saved_cover,dict) else None
+            if not isinstance(prepared,dict):raise ValueError()
+            proof=cover.receipt(images[0],prepared,saved_cover)
+            cover.check_video_ratio(prepared,native)
+            if public['cover_pid']!=proof['pid'] or edit['cover_pid']!=proof['pid']:raise ValueError()
+            bindings.append(dict(asset_id=images[0]['id'],source_sha256=images[0]['sha256'],native_picture_id=proof['pid']))
+        elif images:
+            raise ValueError()
+        return dict(source_binding_verified=True,remote_media_bytes_verified=False,asset_bindings=bindings,
+                    verified_pack_digest=digest(pack),remote_id=public['remote_id'],native_media_id=native['media_id'])
+    except (KeyError,ValueError,TypeError,AttributeError) as exc:
+        raise PublishError('微博视频独立作品与原封存文案、视频或封面来源不符') from exc

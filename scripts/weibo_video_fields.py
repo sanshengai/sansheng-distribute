@@ -24,9 +24,9 @@ def declaration(metadata):
     return label
 
 
-def check(pack):
-    if pack['platform']!='weibo' or pack['endpoint']!='prefill' or pack['content_type']!='video':
-        raise PublishError('微博视频内置路线仅支持预填，不保存平台草稿或发送')
+def check(pack, *, publishing=False):
+    if pack['platform']!='weibo' or pack['endpoint']!=('publish' if publishing else 'prefill') or pack['content_type']!='video':
+        raise PublishError('微博视频终点与明确选择的预填或发送候选不符')
     fields,meta=pack['fields'],pack['platform_metadata']
     if pack['document'] or pack['subtitle_asset_ids'] or set(meta)-{'creation_type','declaration','ai_generated'}:
         raise PublishError('微博视频未映射文章、字幕、合集、定时或其他扩展字段；不省略')

@@ -89,8 +89,13 @@ def preview(page,pid):
     return dict(pid=pid,width=value['width'],height=value['height'])
 
 
-def observe(page,asset,prepared,saved):
-    if (not isinstance(saved,dict) or saved.get('errors')!=[] or saved.get('prepared')!=prepared
+def receipt(asset,prepared,saved):
+    """Bind immutable cover -> native full-frame crop -> upload PID, without UI."""
+    if (not isinstance(prepared,dict)
+            or any(type(prepared.get(k)) is not int or not 0<prepared[k]<=4096 for k in ('width','height'))
+            or type(prepared.get('source_size')) is not int or not 0<prepared['source_size']<=10*1024*1024
+            or (prepared['width']*9!=prepared['height']*16 and prepared['width']*4!=prepared['height']*3)
+            or not isinstance(saved,dict) or saved.get('errors')!=[] or saved.get('prepared')!=prepared
             or prepared['source_asset_id']!=asset['id'] or prepared['source_sha256']!=asset['sha256']):
         raise PublishError('微博封面来源或上传记录缺失')
     verify_crop(saved.get('crop',{}),prepared)
@@ -101,7 +106,13 @@ def observe(page,asset,prepared,saved):
             or responses[0].get('status')!=200 or responses[0].get('ret') is not True
             or not re.fullmatch('[A-Za-z0-9]{8,128}',responses[0].get('pid',''))):
         raise PublishError('微博封面原生裁剪输出与唯一上传回执不符；不重传')
-    return preview(page,responses[0]['pid'])
+    return dict(pid=responses[0]['pid'],source_asset_id=asset['id'],source_sha256=asset['sha256'],
+                native_sha256=saved['crop']['native_sha256'],width=prepared['width'],height=prepared['height'])
+
+
+def observe(page,asset,prepared,saved):
+    value=receipt(asset,prepared,saved)
+    return preview(page,value['pid'])
 
 
 def upload(page,asset,prepared,checkpoint):

@@ -28,7 +28,7 @@ def settings(profile, target):
 def check_pack(pack, *, publishing=False):
     if pack['content_type']=='video':
         from weibo_video_fields import check
-        return check(pack)
+        return check(pack,publishing=publishing)
     if (pack['platform'] != 'weibo' or pack['endpoint'] != ('publish' if publishing else 'prefill')
             or pack['content_type'] not in {'text', 'images'}):
         raise PublishError('微博普通图文仅承接 text/images:prefill/publish；视频按独立预填路线')

@@ -156,6 +156,9 @@ def dispatch(request_path, action, profile, lock_fd):
         from x_publish_browser import dispatch as dispatch_x_publish
         return dispatch_x_publish(request_path, action, profile, lock_fd)
     if candidate.get('platform') == 'weibo' and candidate.get('endpoint') == 'publish':
+        if candidate.get('content_type')=='video':
+            from weibo_video_publish_browser import dispatch as dispatch_weibo_video_publish
+            return dispatch_weibo_video_publish(request_path,action,profile,lock_fd)
         from weibo_publish_browser import dispatch as dispatch_weibo_publish
         return dispatch_weibo_publish(request_path, action, profile, lock_fd)
     if candidate.get('platform') == 'douyin' and candidate.get('endpoint') == 'publish':

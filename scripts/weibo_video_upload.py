@@ -98,6 +98,33 @@ def observe_source(page, asset, saved, *, cover_editing=False):
                 tracking_scope='native_current_file_and_cloud_receipt')
 
 
+def saved_source(asset, saved):
+    """Recheck a previously observed File/cloud binding without source or editor.
+
+    This is an uploaded-object identity proof, never remote playback bytes.
+    It requires the persisted current-File verification; cloud acceptance alone
+    cannot establish the source hash. The caller must bind the enclosing pack.
+    """
+    try:
+        if (not isinstance(saved,dict) or saved.get('upload_errors')!=[]
+                or saved.get('source_sha256')!=asset['sha256']
+                or type(saved.get('source_size')) is not int or saved['source_size']<=0):
+            raise ValueError()
+        cloud=cloud_receipt(saved.get('upload_events'),saved['source_size'])
+        native=saved['native_video']
+        if (not isinstance(native,dict) or native.get('source_asset_id')!=asset['id']
+                or native.get('source_sha256')!=asset['sha256']
+                or native.get('tracking_scope')!='native_current_file_and_cloud_receipt'
+                or any(native.get(k)!=cloud[k] for k in ('media_id','size','chunk_count'))
+                or any(type(native.get(k)) is not int or native[k]<=0 for k in ('width','height'))
+                or type(native.get('duration')) not in (int,float)
+                or not math.isfinite(native['duration']) or native['duration']<=0):
+            raise ValueError()
+        return dict(native)
+    except (KeyError,ValueError,TypeError,AttributeError) as exc:
+        raise PublishError('微博原视频的持久源文件与云端媒体回执不能完整对应') from exc
+
+
 def assert_identity(page, expected):
     if (page.url != CREATOR or not isinstance(expected, str)
             or not re.fullmatch(r'[1-9][0-9]{4,19}', expected)):
