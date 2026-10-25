@@ -256,7 +256,7 @@ def initialize(path, *, platforms=(), account='main', write_scripts=None, env_fi
     if set(platforms) - set(PLATFORMS):
         raise EnvironmentError('存在不支持的平台名称')
     if (not isinstance(browser_engines, (list, tuple)) or any(p not in {'x', 'weibo', 'douyin'} or p not in platforms for p in browser_engines)):
-        raise EnvironmentError('内置浏览器仅可显式选择已配置的 x 文本、weibo 图文或 douyin 视频预填')
+        raise EnvironmentError('内置浏览器仅可显式选择已配置的 x、weibo 或 douyin；输入范围见各平台预填说明')
     if browser_engines and (not browser_profile or not browser_cdp_url):
         raise EnvironmentError('内置浏览器需要专用 profile 与实际本机 CDP 端点')
     if browser_cdp_url is not None:

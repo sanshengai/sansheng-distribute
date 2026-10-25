@@ -146,6 +146,9 @@ def marker_path(request_path):
 
 def dispatch(request_path, action, profile, lock_fd):
     candidate=read_json(request_path).get('target', {})
+    if candidate.get('platform')=='weibo' and candidate.get('content_type')=='video':
+        from weibo_video_browser import dispatch as dispatch_weibo_video
+        return dispatch_weibo_video(request_path,action,profile,lock_fd)
     if candidate.get('platform')=='x' and candidate.get('content_type')=='video':
         from x_video_browser import dispatch as dispatch_x_video
         return dispatch_x_video(request_path,action,profile,lock_fd)

@@ -26,9 +26,12 @@ def settings(profile, target):
 
 
 def check_pack(pack):
+    if pack['content_type']=='video':
+        from weibo_video_fields import check
+        return check(pack)
     if (pack['platform'] != 'weibo' or pack['endpoint'] != 'prefill'
             or pack['content_type'] not in {'text', 'images'}):
-        raise PublishError('当前微博内置模块仅承接 text/images:prefill；视频和最终发送尚未接入')
+        raise PublishError('当前微博内置模块仅承接 text/images/video:prefill；不能最终发送')
     if (pack['cover_asset_id'] or pack['subtitle_asset_ids'] or pack['platform_metadata']
             or (pack['document'] and pack['document']['format'] != 'text')):
         raise PublishError('微博尚未映射独立封面、字幕、长文章或平台扩展字段')
@@ -135,6 +138,9 @@ def marker_path(request_path):
 
 
 def dispatch(request_path, action, profile, lock_fd):
+    if read_json(request_path).get('target',{}).get('content_type')=='video':
+        from weibo_video_browser import dispatch as dispatch_video
+        return dispatch_video(request_path,action,profile,lock_fd)
     if action not in {'execute', 'verify'}: raise PublishError('不支持的微博阶段')
     try: os.fstat(lock_fd)
     except OSError as exc: raise PublishError('微博执行须继承核心账号锁') from exc

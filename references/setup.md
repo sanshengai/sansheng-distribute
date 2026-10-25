@@ -44,7 +44,7 @@ python3 '<skill-root>/setup.py' --init --platform x \
 
 公开身份存为 `accounts.<alias>.public_identities.<platform>`，浏览器目录存为 `browser_profile`。引导不会创建浏览器目录、登录或读取 cookie。缺失这些项时仍可建立待配置文件，但 `configuration_ready=false`，诊断返回未就绪；补齐同一文件后再跑 `--doctor`。本地路径和公开身份齐备也不证明实际页面已登录或账号匹配，执行时仍要重新观察。
 
-普通浏览器路线仍使用 Agent 接力。需要试验包内 X 文字/多图/视频、微博图文或抖音视频预填时，显式增加对应的 `--browser-engine x|weibo|douyin` 和 `--browser-cdp-url <实际本机端点>`；依赖准备、输入边界与临时编辑会话读回见 [内置引擎](browser-engines.md)。不会自动启用媒体或发送。
+普通浏览器路线仍使用 Agent 接力。需要试验包内 X 或微博文字/多图/视频，以及抖音视频预填时，显式增加对应的 `--browser-engine x|weibo|douyin` 和 `--browser-cdp-url <实际本机端点>`；依赖准备、输入边界与临时编辑会话读回见 [内置引擎](browser-engines.md)。不会自动启用媒体或发送。
 
 ## 选用 B站受控 CLI
 
