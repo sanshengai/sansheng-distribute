@@ -184,6 +184,47 @@ def render_background_page(page):
         raise PublishError('后台页面原生渲染未就绪；不切到前台重试')
 
 
+CLICK_TARGET = '''node => {
+  const rect=node.getBoundingClientRect(), style=getComputedStyle(node);
+  const x=rect.x+rect.width/2, y=rect.y+rect.height/2;
+  let hit=document.elementFromPoint(x,y);
+  while(hit?.shadowRoot?.elementFromPoint) {
+    const inner=hit.shadowRoot.elementFromPoint(x,y);
+    if(!inner || inner===hit)break;
+    hit=inner;
+  }
+  return {x,y,width:rect.width,height:rect.height,
+    ready:node.isConnected && !node.disabled && !node.matches(':disabled')
+      && !node.closest('[inert],[aria-disabled="true"]')
+      && style.visibility==='visible' && style.display!=='none'
+      && Number(style.opacity)>0 && rect.width>0 && rect.height>0
+      && x>=0 && y>=0 && x<innerWidth && y<innerHeight
+      && !!hit && (hit===node || node.contains(hit))};
+}'''
+
+
+def click_background(page, node):
+    """One native pointer click after two stable, unobscured observations.
+
+    Locator.click waits for animation frames, which Chrome can suspend in a
+    background tab. Do not solve that by activating it, force-clicking, sending
+    synthetic DOM events, or retrying after an uncertain click. Callers must
+    verify the expected native result and keep their own attempt checkpoint.
+    """
+    if node.count()!=1:
+        raise PublishError('后台点击目标不唯一；不猜选或激活标签页')
+    first=node.evaluate(CLICK_TARGET)
+    if first.get('ready') is not True:
+        raise PublishError('后台点击目标不可见、禁用、被遮挡或位于视口之外')
+    time.sleep(.05)
+    if node.count()!=1:
+        raise PublishError('后台点击目标已改变；不继续点击')
+    second=node.evaluate(CLICK_TARGET)
+    if second!=first or second.get('ready') is not True:
+        raise PublishError('后台点击目标尚未稳定；不点击或切到前台重试')
+    page.mouse.click(second['x'],second['y'])
+
+
 def inspect(profile):
     with connect(profile) as connection:
         counts = {p:0 for p in ORIGINS}
