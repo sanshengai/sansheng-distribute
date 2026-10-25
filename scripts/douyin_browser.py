@@ -12,6 +12,7 @@ from browser_runtime import background_tab, browser_config, connect, select_page
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
 import douyin_cover
+import douyin_video
 
 HOME = 'https://creator.douyin.com/creator-micro/home'
 UPLOAD = '/creator-micro/content/upload'
@@ -431,8 +432,11 @@ def dispatch(request_path, action, profile, lock_fd):
         assert_identity(page, identity); no_warning(page)
         if action == 'execute':
             empty_upload(page)
+            douyin_video.prepare(next(x for x in pack['assets'] if x['kind'] == 'video'))
             assets = stage(pack, request_path)
             cover_sources = douyin_cover.prepare(page, assets, douyin_cover.requested(pack))
+            video = next(x for x in assets if x['kind'] == 'video')
+            douyin_video.prepare(video)
             saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
                          tracking_scope='chrome_session_only', video=None)
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -447,7 +451,9 @@ def dispatch(request_path, action, profile, lock_fd):
                 && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
                 && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
             }''', timeout=180000)
-            saved['video'] = video_identity(page); saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
+            saved['video'] = video_identity(page)
+            saved['source_video'] = douyin_video.observe(page, video)
+            saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
             assert_identity(page, identity); no_warning(page)
             title, description = assert_empty_fields(page)
             # Do not overwrite an existing native declaration or collection.
@@ -472,11 +478,14 @@ def dispatch(request_path, action, profile, lock_fd):
         if saved.get('state') not in {'uploaded', 'filled'} or not saved.get('video'):
             raise PublishError('抖音尚未完成全部字段；只查询，不补填或重传')
         verify_fields(page, pack, saved); assert_identity(page, identity); no_warning(page)
+        source_verified = douyin_video.verify(page, pack, saved)
         result = {k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')}
         result.update(state='pending' if action == 'execute' else 'prefill_ready',
             remote_id='browser-editor:'+saved['target_id'], remote_url=page.url,
             observed_account_identity=identity, tracking_scope='chrome_session_only',
-            platform_draft_saved=False, final_click_available=False)
+            platform_draft_saved=False, final_click_available=False,
+            source_media_verified=source_verified,
+            source_media_scope='native_editor_preview_bytes' if source_verified else None)
         if action == 'verify':
             result.update(content_verified=True, verified_pack_digest=digest(pack),
                           verified_asset_ids=[a['id'] for a in pack['assets']])

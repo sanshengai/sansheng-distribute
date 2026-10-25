@@ -1,4 +1,6 @@
 import contextlib
+import hashlib
+import json
 import copy
 from pathlib import Path
 import re
@@ -31,9 +33,14 @@ class Node:
         return 1
     def is_visible(self):return self.count()==1
     def get_attribute(self,name):return 'video/mp4' if name=='accept' else None
-    def evaluate(self,script):
+    def evaluate(self,script,*args):
         if self.kind=='file':return not self.page.pending_file
-        if self.kind=='video':return dict(src=self.page.preview,duration=self.page.duration,ready=4)
+        if self.kind=='video':
+            value=dict(src=self.page.preview,duration=self.page.duration,ready=4)
+            if args:
+                data=self.page.uploads[0]
+                value.update(sha256=hashlib.sha256(data).hexdigest(),size=len(data),width=720,height=1280)
+            return value
         if self.kind=='description' and script==douyin.DESCRIPTION_READ:return self.page.description
         if self.kind=='description' and script==douyin.NATIVE_DOCUMENT_READ:
             return dict(text=self.page.description,topics=list(self.page.topics))
@@ -185,11 +192,49 @@ class DouyinTests(unittest.TestCase):
     def test_complete_native_prefill_and_independent_resume_no_reupload(self):
         result=run(self.path,'douyin',self.profile,self.store)
         self.assertEqual(result['state'],'prefill_ready');self.assertEqual(self.page.uploads,[b'local sealed fixture'])
+        observation=json.loads(self.store.db.execute('SELECT data FROM events WHERE job_key=? ORDER BY id DESC LIMIT 1',(self.key,)).fetchone()['data'])
+        self.assertTrue(observation['source_media_verified'])
+        self.assertEqual(observation['source_media_scope'],'native_editor_preview_bytes')
         self.assertEqual(self.page.declaration,'无需添加自主声明');self.assertEqual(self.page.collection,'A collection')
         self.assertNotIn('rotating',str(read_json(douyin.marker_path(self.request))))
         run(self.path,'douyin',self.profile,self.store,resume=True)
         self.assertEqual(self.page.fills,2);self.assertEqual(len(self.page.uploads),1)
         self.assertEqual(self.page.identity_opened,self.page.identity_closed)
+
+    def test_legacy_prefill_stays_readonly_without_claiming_source_bytes(self):
+        run(self.path,'douyin',self.profile,self.store)
+        saved=read_json(douyin.marker_path(self.request));saved.pop('source_video')
+        write_json(douyin.marker_path(self.request),saved)
+        result=run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(result['state'],'prefill_ready')
+        observation=json.loads(self.store.db.execute('SELECT data FROM events WHERE job_key=? ORDER BY id DESC LIMIT 1',(self.key,)).fetchone()['data'])
+        self.assertFalse(observation['source_media_verified']);self.assertIsNone(observation['source_media_scope'])
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_source_byte_failure_retains_attempt_and_never_reuploads(self):
+        with patch.object(douyin.douyin_video,'observe',side_effect=PublishError('source differs')):
+            with self.assertRaisesRegex(PublishError,'source differs'):
+                run(self.path,'douyin',self.profile,self.store)
+        saved=read_json(douyin.marker_path(self.request))
+        self.assertEqual(saved['state'],'attempted');self.assertEqual(self.page.fills,0)
+        with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_saved_source_receipt_tamper_fails_resume_without_upload(self):
+        run(self.path,'douyin',self.profile,self.store)
+        saved=read_json(douyin.marker_path(self.request))
+        saved['source_video']['source_sha256']='0'*64
+        write_json(douyin.marker_path(self.request),saved)
+        with self.assertRaisesRegex(PublishError,'原片字节回执'):
+            run(self.path,'douyin',self.profile,self.store,resume=True)
+        self.assertEqual(len(self.page.uploads),1)
+
+    def test_source_memory_bound_rejected_before_file_selection(self):
+        with patch.object(douyin.douyin_video,'MAX_BYTES',1):
+            with self.assertRaisesRegex(PublishError,'256MiB'):
+                run(self.path,'douyin',self.profile,self.store)
+        self.assertFalse(self.page.uploads)
+        self.assertFalse(douyin.marker_path(self.request).exists())
 
     def test_wrong_actual_account_never_uploads(self):
         self.page.uid='wrong_123'
