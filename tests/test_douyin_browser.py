@@ -23,6 +23,8 @@ class Node:
         p=self.page
         if self.values is not None:return len(self.values)
         if self.kind=='old':return 1 if p.old_content else 0
+        if self.kind=='local_draft':return int(p.local_draft)
+        if self.kind=='local_draft_hint':return int(p.local_draft_hint)
         if self.kind=='video':return 1 if p.uploads else 0
         if self.kind=='modal':return int(p.modal)
         if self.kind=='chosen':return int(bool(p.pending_declaration))
@@ -105,6 +107,7 @@ class Page:
         self.title='';self.description='';self.declaration='请选择自主声明';self.collection='请选择合集'
         self.pending_declaration='';self.options=['A collection'];self.uploads=[];self.fills=0
         self.old_content=False;self.pending_file=False;self.modal=False;self.dropdown=False
+        self.local_draft=False;self.local_draft_hint=False
         self.lose_upload=False;self.lost_identity=False;self.identity_goto_error=False
         self.identity_closed=0;self.identity_opened=0;self.context=self;self.ident='DouyinFixtureTarget'
         self.remount_first_choice=False;self.remount_every_choice=False;self.choice_clicks=0
@@ -133,6 +136,8 @@ class Page:
         if selector.startswith('[role="option"]'):return Node(self,'option',self.options)
         return Node(self,'alert')
     def get_by_text(self,text,**kwargs):
+        if text=='继续编辑':return Node(self,'local_draft')
+        if text=='你还有上次未发布的视频，是否继续编辑？':return Node(self,'local_draft_hint')
         return Node(self,'add_topic' if text=='#添加话题' else 'label' if text=='自主声明' else 'reupload')
 
 
@@ -235,6 +240,25 @@ class DouyinTests(unittest.TestCase):
             self.page.old_content,self.page.pending_file=old,pending
             with self.assertRaises(PublishError):run(self.path,'douyin',self.profile,self.store)
             self.assertEqual(self.page.uploads,[]);self.assertEqual(self.page.fills,0)
+
+    def test_native_local_draft_prompt_preserves_previous_work_before_upload(self):
+        # The native upload input remains usable underneath this prompt. Its
+        # absence of editor fields therefore does NOT prove the page is empty.
+        for continue_link,hint in ((True,False),(False,True),(True,True)):
+            with self.subTest(continue_link=continue_link,hint=hint):
+                self.page.local_draft=continue_link;self.page.local_draft_hint=hint
+                with self.assertRaisesRegex(PublishError,'本地暂存'):
+                    douyin.empty_upload(self.page)
+                self.assertEqual(self.page.uploads,[])
+                self.assertEqual(self.page.fills,0)
+
+    def test_native_local_draft_stops_uniform_dispatch_before_snapshot_or_upload(self):
+        self.page.local_draft=True
+        with self.assertRaisesRegex(PublishError,'本地暂存'):
+            run(self.path,'douyin',self.profile,self.store)
+        self.assertEqual(self.page.uploads,[])
+        self.assertEqual(self.page.fills,0)
+        self.assertFalse(douyin.marker_path(self.request).exists())
 
     def test_lost_upload_outcome_is_query_only(self):
         self.page.lose_upload=True

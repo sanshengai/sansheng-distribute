@@ -192,6 +192,9 @@ def unique(node, label):
 
 def empty_upload(page):
     origin(page, UPLOAD)
+    if (page.get_by_text('继续编辑', exact=True).filter(visible=True).count()
+            or page.get_by_text('你还有上次未发布的视频，是否继续编辑？', exact=True).filter(visible=True).count()):
+        raise PublishError('抖音有上次未发布的本地暂存；不上传覆盖，也不自动放弃')
     if page.locator(TITLE+', '+DESCRIPTION+', video').count():
         raise PublishError('抖音已有编辑内容；不替换作者稿件')
     file = page.locator('input[type="file"]')
