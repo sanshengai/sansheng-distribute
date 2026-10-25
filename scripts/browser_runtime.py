@@ -104,6 +104,41 @@ def connect(profile, *, writing=False):
         yield connection
 
 
+@contextlib.contextmanager
+def background_tab(anchor):
+    """Create an owned identity tab without activating Chrome or another tab."""
+    context = anchor.context
+    session = context.new_cdp_session(anchor)
+    owned = None
+    target = None
+    try:
+        info = session.send('Target.getTargetInfo')['targetInfo']
+        params = dict(url='about:blank', background=True)
+        if info.get('browserContextId'):
+            params['browserContextId'] = info['browserContextId']
+        with context.expect_page(timeout=10000) as created:
+            target = session.send('Target.createTarget', params)['targetId']
+        candidate = created.value
+        check = context.new_cdp_session(candidate)
+        try:
+            actual = check.send('Target.getTargetInfo')['targetInfo']['targetId']
+        finally:
+            check.detach()
+        if actual != target:
+            # An unrelated concurrent popup is not ours to close or navigate.
+            raise PublishError('后台身份页身份不符；不操作其他标签页')
+        owned = candidate
+        yield owned
+    finally:
+        try:
+            if owned is not None:
+                owned.close()
+            elif target is not None:
+                session.send('Target.closeTarget', dict(targetId=target))
+        finally:
+            session.detach()
+
+
 def select_page(connection, platform, *, target_id=None, path=None):
     matches = []
     for context in connection.contexts:

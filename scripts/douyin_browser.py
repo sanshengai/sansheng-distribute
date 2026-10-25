@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlsplit
 
 from browser_assets import checked_path, stage
-from browser_runtime import browser_config, connect, select_page
+from browser_runtime import background_tab, browser_config, connect, select_page
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
 
@@ -163,8 +163,7 @@ def origin(page, path):
 def assert_identity(page, expected):
     # The editor exposes a nickname only. A temporary native homepage in the
     # SAME context independently exposes the stable Douyin ID; never export cookies.
-    identity = page.context.new_page()
-    try:
+    with background_tab(page) as identity:
         identity.goto(HOME, wait_until='domcontentloaded', timeout=15000)
         origin(identity, '/creator-micro/home')
         number = identity.get_by_text(re.compile(r'^抖音号[：:]?')).filter(visible=True)
@@ -174,8 +173,6 @@ def assert_identity(page, expected):
         actual = re.sub(r'^抖音号\s*[：:]?\s*', '', number.inner_text())
         if actual != expected:
             raise PublishError('抖音实际登录账号与封存目标不符')
-    finally:
-        identity.close()
 
 
 def no_warning(page):
@@ -426,14 +423,14 @@ def dispatch(request_path, action, profile, lock_fd):
         page = select_page(connection, 'douyin', target_id=saved['target_id'] if action == 'verify' else None)
         assert_identity(page, identity); no_warning(page)
         if action == 'execute':
-            page.bring_to_front(); empty_upload(page)
+            empty_upload(page)
             assets = stage(pack, request_path)
             saved = dict(bound, target_id=target_id(page), state='attempted', phase='upload',
                          tracking_scope='chrome_session_only', video=None)
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as stream:
                 json.dump(saved, stream); stream.flush(); os.fsync(stream.fileno())
-            assert_identity(page, identity); page.bring_to_front(); no_warning(page)
+            assert_identity(page, identity); no_warning(page)
             empty_upload(page).set_input_files(checked_path(assets[0]), timeout=15000)
             page.wait_for_function('''() => {
               const ns=Array.from(document.querySelectorAll('video'));
@@ -442,7 +439,7 @@ def dispatch(request_path, action, profile, lock_fd):
                 && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
             }''', timeout=180000)
             saved['video'] = video_identity(page); saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
-            assert_identity(page, identity); page.bring_to_front(); no_warning(page)
+            assert_identity(page, identity); no_warning(page)
             title, description = assert_empty_fields(page)
             # Do not overwrite an existing native declaration or collection.
             if (declaration_control(page).inner_text() != '请选择自主声明'

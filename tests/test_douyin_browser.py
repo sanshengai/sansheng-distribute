@@ -119,7 +119,7 @@ class Page:
             def send(self,method):return {'targetInfo':{'targetId':owner.ident}}
             def detach(self):pass
         return Session()
-    def bring_to_front(self):pass
+    def bring_to_front(self):raise AssertionError('must not activate Chrome')
     def wait_for_function(self,*args,**kwargs):pass
     def locator(self,selector):
         if selector==douyin.TITLE:return Node(self,'title')
@@ -164,6 +164,12 @@ class DouyinTests(unittest.TestCase):
             class Browser:contexts=[self.page]
             yield Browser()
         patch.object(douyin,'connect',side_effect=connect).start()
+        @contextlib.contextmanager
+        def background_tab(page):
+            identity=page.new_page()
+            try:yield identity
+            finally:identity.close()
+        patch.object(douyin,'background_tab',side_effect=background_tab).start()
         patch('runtime.inspect',return_value={'ok':True,'python':'/isolated/python'}).start()
         def invoke(config,action,path,*,lock_fd):
             self.actions.append(action);return douyin.dispatch(path,action,self.profile,lock_fd)

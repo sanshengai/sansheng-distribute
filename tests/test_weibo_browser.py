@@ -53,7 +53,7 @@ class Page:
         self.uid='123456789';self.text='';self.pending=0;self.cards=1;self.media=[]
         self.uploads=[];self.fills=0;self.lose_before_receipt=False;self.lose_after_receipt=False
         self.response=None;self.ident='WeiboRealTargetA';self.context=self
-    def bring_to_front(self): pass
+    def bring_to_front(self): raise AssertionError('must not activate Chrome')
     def wait_for_function(self,*args,**kwargs): pass
     @property
     def pages(self): return [self]

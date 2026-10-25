@@ -6,7 +6,7 @@
 
 普通浏览器平台的 execute 和 verify 都指向 `scripts/agent_adapter.py`，分别传 `execute`、`verify`；`timeout_seconds` 设为 2100，接力器默认最多等待 1800 秒。路径按本机实际安装位置配置；能力在真实账号验收前保持关闭。
 
-1. 完成 `check / prepare / authorize`，使用实际授权，不额外要求作者逐平台点击。以宿主可续查的后台命令运行 `publish.py run ...`，保留命令 session ID；不要让一个工具调用阻塞半小时。
+1. 完成 `check / prepare / authorize`，使用实际授权，不额外要求作者逐平台点击。以宿主可续查的后台命令运行 `publish.py run ...`，保留命令 session ID；不要让一个工具调用阻塞半小时。浏览器也默认在后台操作，不主动激活应用或切换前台标签；需要本人扫码或验证时再提示。
 2. 运行时产生 `<state-dir>/requests/<key>.json`。执行 `agent_adapter.py inspect --request <该文件>` 取得当前阶段、nonce、目标、快照和媒体清单。
 3. 核对专用浏览器 profile 与实际账号。按当前页面观察操作，不使用文档中的旧索引或猜测按钮。每次远端写入前重新 inspect，确保接力仍存活；超时/退出后只查已有结果，不继续点击提交。
 4. execute 阶段填稿/上传/按授权提交，取得真实可恢复草稿身份或内容 ID；立即以本阶段观察记录回应 pending。不能把本地 job key 或普通首页 URL 冒充远端身份。

@@ -158,7 +158,6 @@ def dispatch(request_path, action, profile, lock_fd):
         page = select_page(connection, 'weibo', target_id=saved['target_id'] if action == 'verify' else None)
         assert_identity(page, identity); assert_no_warning(page)
         if action == 'execute':
-            page.bring_to_front()
             empty_editor(page)
             assets = stage(pack, request_path) if pack['assets'] else []
             saved = dict(bound, target_id=target_id(page), state='attempted',
