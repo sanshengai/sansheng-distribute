@@ -17,6 +17,7 @@ import re
 from publish_core import PublishError, digest, file_hash, read_json, resolve_file, validate, visible_text, write_json
 from wechat_media import reconcile, component_info
 from wechat_links import project_links
+from wechat_identity import image_identity, article_identity, load_link_identities, editor_visible_text
 
 
 def normalize_legacy_anchors(content, slots):
@@ -48,23 +49,23 @@ def normalize_legacy_anchors(content, slots):
 
 
 class Links(HTMLParser):
-    def __init__(self):
-        super().__init__(); self.images=[]; self.links=[]
+    def __init__(self, identities=None):
+        super().__init__(); self.images=[]; self.links=[]; self.identities=identities or {}
     def handle_starttag(self, tag, attrs):
         attrs=dict(attrs)
-        if tag=='img': self.images.append(attrs.get('src',''))
-        if tag=='a': self.links.append(attrs.get('href',''))
+        if tag=='img': self.images.append(image_identity(attrs))
+        if tag=='a': self.links.append(article_identity(self.identities.get(attrs.get('href',''),attrs.get('href',''))))
 
 
 class BodyOrder(HTMLParser):
-    def __init__(self):
-        super().__init__(); self.parts=[]; self.hidden=0
+    def __init__(self, identities=None):
+        super().__init__(); self.parts=[]; self.hidden=0; self.identities=identities or {}
     def handle_starttag(self,tag,attrs):
         attrs=dict(attrs)
         if tag in {'script','style'}: self.hidden+=1
         if not self.hidden:
-            if tag=='img': self.parts.append(('image',attrs.get('src','')))
-            if tag=='a': self.parts.append(('link',attrs.get('href','')))
+            if tag=='img': self.parts.append(('image',image_identity(attrs)))
+            if tag=='a': self.parts.append(('link',article_identity(self.identities.get(attrs.get('href',''),attrs.get('href','')))))
     def handle_endtag(self,tag):
         if tag in {'script','style'} and self.hidden: self.hidden-=1
         if not self.hidden and tag=='a': self.parts.append(('end-link',))
@@ -82,14 +83,14 @@ class BodyOrder(HTMLParser):
         return result
 
 
-def article_equivalent(expected, actual):
+def article_equivalent(expected, actual, identities=None):
     for key in ('title','author','digest','content_source_url','thumb_media_id','need_open_comment','only_fans_can_comment'):
         if key in expected and str(expected[key]) != str(actual.get(key,'')):
             return False
-    if visible_text(expected.get('content','')) != visible_text(actual.get('content','')):
+    if editor_visible_text(expected.get('content','')) != editor_visible_text(actual.get('content','')):
         return False
-    a,b=Links(),Links(); a.feed(expected.get('content','')); b.feed(actual.get('content',''))
-    x,y=BodyOrder(),BodyOrder(); x.feed(expected.get('content','')); y.feed(actual.get('content',''))
+    a,b=Links(identities),Links(identities); a.feed(expected.get('content','')); b.feed(actual.get('content',''))
+    x,y=BodyOrder(identities),BodyOrder(identities); x.feed(expected.get('content','')); y.feed(actual.get('content',''))
     return a.images==b.images and a.links==b.links and x.signature()==y.signature()
 
 
@@ -318,6 +319,7 @@ def dispatch(request_path, profile, api, *, action):
     slots=[s for s in manifest.get('media_slots',[]) if s['document_id']==target['document_id']]
     comparison_content = normalize_legacy_anchors(actual.get('content',''), slots) if binding else actual.get('content','')
     expected=record.get('expected',{})
+    identities=load_link_identities(request_path, req['manifest_digest'], remote_id)
     # A historical draft may have lost ONLY its external anchor tags. Keep the
     # original expectation; require the missing URLs to be restored visibly.
     # This is a repair stage, never a successful readback or permission to rewrite.
@@ -325,7 +327,7 @@ def dispatch(request_path, profile, api, *, action):
         projected,stripped,changes=project_links(expected.get('content',''))
         if changes:
             projected_expected=dict(expected,content=projected)
-            if not component_info(comparison_content) and article_equivalent(dict(expected,content=stripped),dict(actual,content=comparison_content)):
+            if not component_info(comparison_content) and article_equivalent(dict(expected,content=stripped),dict(actual,content=comparison_content),identities):
                 return observed('pending',stage='external_link_repair_required',
                                 link_work=changes,article_body_verified=True,content_verified=False)
             expected=projected_expected
@@ -334,7 +336,7 @@ def dispatch(request_path, profile, api, *, action):
     if slots and media_receipt.exists():
         restored,remaining=reconcile(comparison_content,slots,{a['id']:a for a in manifest['assets']},receipt,
                            manifest_digest=req['manifest_digest'],remote_id=remote_id)
-        if not article_equivalent(expected,dict(actual,content=restored)):
+        if not article_equivalent(expected,dict(actual,content=restored),identities):
             raise PublishError('插入媒体后正文、位置或图片链接有差异；不覆盖远端')
         if remaining:
             return observed('pending',stage='native_media_insertion_required',media_work=remaining,
@@ -344,7 +346,7 @@ def dispatch(request_path, profile, api, *, action):
         return observed('draft_ready',content_verified=True,layout_verified=True,
                         verification='official_draft_get_and_observed_media_receipt',
                         remote_media_bytes_verified=False)
-    if not expected or not article_equivalent(expected,dict(actual,content=comparison_content)):
+    if not expected or not article_equivalent(expected,dict(actual,content=comparison_content),identities):
         raise PublishError('草稿读回内容有差异；需核对正文、媒体和排版，不覆盖远端')
     if slots:
         return observed('pending',stage='native_media_insertion_required',media_slot_ids=[s['id'] for s in slots],

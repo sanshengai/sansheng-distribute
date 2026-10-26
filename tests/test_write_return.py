@@ -53,6 +53,19 @@ class WriteReturnTests(unittest.TestCase):
              patch('release_to_draft.brand',return_value={}):
             return import_return(self.root,path)
 
+    def test_producer_profile_is_bound_before_brand_resolution(self):
+        bound=[]
+        def brand():
+            if bound != [self.root]:
+                raise RuntimeError('workspace placeholders are unbound')
+            return {}
+        with patch('profile_config.bind_workspace',side_effect=lambda root:bound.append(root)), \
+             patch('write_bridge.invoke',side_effect=self.fx.invoke), \
+             patch('evidence.verify_publish_ready',return_value=(self.ready,[])), \
+             patch('release_to_draft.brand',side_effect=brand):
+            result=return_to_write(self.fx.store,self.key,self.fx.profile,self.root,self.scripts)
+        self.assertEqual(result['draft_media_id'],'old-draft')
+
     def test_media_roundtrip_preserves_original_receipt_and_never_uploads(self):
         old = (self.root/'_publish-receipt.json').read_bytes()
         result = self.bridge(); receipt = self.consume(result['receipt'])

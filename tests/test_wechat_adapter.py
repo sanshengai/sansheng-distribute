@@ -201,7 +201,9 @@ class WechatTests(unittest.TestCase):
 
     def test_visual_review_is_bound_to_actual_html(self):
         dispatch(self.request,self.profile,self.api,action='execute'); self.visual_receipt()
-        self.api.articles['draft-fixture']['content']='<span style="display:none">标题正文</span>'
+        # Keep the same block-separated text so this specifically exercises
+        # the independent layout hash check rather than body text rejection.
+        self.api.articles['draft-fixture']['content']='<h1 style="display:none">标题</h1><p style="display:none">正文</p>'
         with self.assertRaisesRegex(PublishError,'视觉检查'): dispatch(self.request,self.profile,self.api,action='verify')
 
     def test_image_position_and_unknown_player_refused(self):

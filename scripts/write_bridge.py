@@ -14,6 +14,20 @@ from publish_core import (PublishError, adapter_config, digest, file_hash, invok
                           now, read_json, target_of, validate, write_json)
 from wechat_adapter import normalize_legacy_anchors
 from wechat_media import reconcile
+from wechat_links import project_links
+
+
+def comparison_expected(expected, profile, account):
+    """The only allowed text projection is the account's explicit URL policy."""
+    policy = profile.get('accounts',{}).get(account,{}).get('external_link_policy','strict')
+    if policy == 'strict':
+        return expected, None
+    if policy != 'visible_url':
+        raise PublishError('未知公众号外链策略')
+    projected, _, changes = project_links(expected['content'])
+    return dict(expected, content=projected), dict(policy=policy, changes=changes,
+        source_sha256=hashlib.sha256(expected['content'].encode()).hexdigest(),
+        projected_sha256=hashlib.sha256(projected.encode()).hexdigest())
 
 
 def return_to_write(store, key, profile, article_dir, write_scripts):
@@ -23,6 +37,7 @@ def return_to_write(store, key, profile, article_dir, write_scripts):
     sys.path.insert(0, str(scripts))
     import evidence
     import release_to_draft as release
+    import profile_config
 
     job = store.status(key)
     manifest = read_json(store.directory/'snapshots'/f'{key}.json')
@@ -37,6 +52,7 @@ def return_to_write(store, key, profile, article_dir, write_scripts):
         raise PublishError('此回传入口只处理公众号文章草稿')
     if not job.get('remote_id') or job['state'] not in {'pending','draft_ready'}:
         raise PublishError('尚无已读回的目标草稿；先 resume 核实')
+    profile_config.bind_workspace(root)
     ready, errors = evidence.verify_publish_ready(root)
     expected, more = release.build_expected_draft(root)
     if errors or more or not ready or not expected:
@@ -89,9 +105,10 @@ def return_to_write(store, key, profile, article_dir, write_scripts):
                 raise PublishError('缺唯一原稿锚点；先重新导出，不能猜回填位置')
             restored = restored.replace(token,anchor)
         compared = dict(actual,content=restored)
-        checks, errors = release._compare_readback(expected,compared,str(actual.get('thumb_media_id') or ''))
+        projected_expected, projection = comparison_expected(expected,profile,target['account'])
+        checks, errors = release._compare_readback(projected_expected,compared,str(actual.get('thumb_media_id') or ''))
         # The external path does not inherit the legacy reader's fuzzy drift allowance.
-        if release._semantic_body_digest(expected['content']) != release._semantic_body_digest(restored):
+        if release._semantic_body_digest(projected_expected['content']) != release._semantic_body_digest(restored):
             errors.append('外部回传正文与 Write 原稿不一致')
         if errors:
             raise PublishError('; '.join(errors))
@@ -111,6 +128,8 @@ def return_to_write(store, key, profile, article_dir, write_scripts):
                          content_sha256=hashlib.sha256(actual['content'].encode()).hexdigest(),
                          source_files=[dict(path=r['path'],sha256=r['sha256']) for r in manifest['documents']+manifest['assets']]),
                        native_media=native)
+        if projection:
+            receipt['external_publisher']['content_projection'] = projection
         # A later readback must never invalidate an already imported receipt.
         destination = root/'过程记录'/'publish'/'returned'/key/request['verification_nonce']
         destination.mkdir(parents=True,exist_ok=True)
