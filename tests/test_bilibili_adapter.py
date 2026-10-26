@@ -1,5 +1,6 @@
 """Core-to-CLI tests: durable identity, independent reads and no retry after ambiguity."""
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,39 @@ class BilibiliAdapterTests(unittest.TestCase):
             self.assertEqual(params, {'aid':'7'}); return copy.deepcopy(self.archive)
         if kind == 'public': return copy.deepcopy(self.public)
         raise AssertionError(kind)
+
+    def test_cover_readback_without_cli_url_requires_exact_sealed_pixels(self):
+        from PIL import Image
+        def png(color, compression):
+            stream = io.BytesIO()
+            mode = 'RGBA' if isinstance(color, tuple) and len(color) == 4 else 'RGB'
+            Image.new(mode, (8, 6), color).save(stream, format='PNG', compress_level=compression)
+            return stream.getvalue()
+        original = png('green', 0)
+        asset = self.manifest['assets'][1]
+        (self.root/'cover.jpg').write_bytes(original)
+        asset['sha256'] = __import__('hashlib').sha256(original).hexdigest()
+        pack = build_pack(self.manifest, 'bili', self.profile, check_files=False)
+        staged = self.request.with_suffix('.bilibili-assets'); staged.mkdir(parents=True)
+        (staged/'cover.jpg').write_bytes(original)
+        opener = unittest.mock.MagicMock()
+        response = opener.open.return_value.__enter__.return_value
+        response.read.return_value = png('green', 9)
+        with patch.object(adapter.urllib.request, 'build_opener', return_value=opener):
+            self.assertTrue(adapter.verify_cover_bytes(pack, self.request, self.cover))
+            response.read.return_value = png('red', 9)
+            self.assertFalse(adapter.verify_cover_bytes(pack, self.request, self.cover))
+            response.read.return_value = png((0, 128, 0, 0), 9)
+            self.assertFalse(adapter.verify_cover_bytes(pack, self.request, self.cover))
+            response.read.return_value = b''
+            self.assertFalse(adapter.verify_cover_bytes(pack, self.request, self.cover))
+            (staged/'cover.jpg').write_bytes(png('red', 0))
+            self.assertFalse(adapter.verify_cover_bytes(pack, self.request, self.cover))
+            opener.reset_mock()
+            for url in ('', 'https://example.com/cover.png', 'https://i0.hdslb.com.evil.invalid/bfs/archive/abcd.png',
+                        'https://i0.hdslb.com:bad/bfs/archive/abcd.png'):
+                self.assertFalse(adapter.verify_cover_bytes(pack, self.request, url))
+            opener.open.assert_not_called()
 
     @property
     def request(self): return self.store.directory/'requests'/f'{self.key}.json'

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import io
 import json
 import math
 import os
@@ -219,6 +220,53 @@ def same_cover(first, second):
     return key(first) is not None and key(first) == key(second)
 
 
+def cover_pixels(raw):
+    """Ignore lossless PNG re-encoding, never approximate a different cover."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise PublishError('B站封面日志缺少地址；只读像素核验需要 Pillow，不要重新投稿') from exc
+    with Image.open(io.BytesIO(raw)) as image:
+        if image.width * image.height > 20_000_000:
+            raise PublishError('B站封面超过像素核验预算')
+        rgb = image.convert('RGBA')
+        return (rgb.size, hashlib.sha256(rgb.tobytes()).hexdigest())
+
+
+def verify_cover_bytes(pack, request_path, url):
+    # The pinned CLI does not always print its uploaded cover URL. Recover only
+    # from our immutable staged file, whose byte hash is bound to the manifest.
+    asset = next((a for a in pack['assets'] if a['id'] == pack.get('cover_asset_id')), None)
+    if not asset or not isinstance(url, str): return False
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
+            or not parsed.hostname.endswith('.hdslb.com') or port
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or not re.fullmatch(r'/bfs/archive/[a-fA-F0-9]+\.[A-Za-z0-9]+', parsed.path)):
+        return False
+    source = Path(request_path).with_suffix('.bilibili-assets')/(asset['id'] + Path(asset['absolute_path']).suffix.lower())
+    if not source.is_file() or source.stat().st_size > 8 * 1024 * 1024: return False
+    raw = source.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != asset['sha256']: return False
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            raise PublishError('B站封面核验不跟随重定向')
+    request = urllib.request.Request('https://' + parsed.netloc + parsed.path,
+                                     headers={'User-Agent':'Mozilla/5.0'})
+    try:
+        expected = cover_pixels(raw)
+        with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+            remote = response.read(8 * 1024 * 1024 + 1)
+        if not remote or len(remote) > 8 * 1024 * 1024: return False
+        return expected == cover_pixels(remote)
+    except (OSError, ValueError):
+        return False
+
+
 def verify_content(pack, receipt, data, uid, tid):
     recorded_duration = receipt.get('duration_seconds')
     if (type(recorded_duration) not in (int, float) or not math.isfinite(recorded_duration)
@@ -287,6 +335,8 @@ def dispatch(request_path, action, profile, fd):
         raise PublishError('B站远端稿件身份改变')
     data = reader.get('archive', aid=receipt['aid'])
     archive, video, cover_ok = verify_content(pack, receipt, data, uid, cfg['tid'])
+    if not cover_ok:
+        cover_ok = verify_cover_bytes(pack, request_path, archive.get('cover'))
     evidence = {'archive':{k:archive.get(k) for k in ('aid','bvid','mid','title','desc','tag','cover','copyright','tid','state','creation_statement')},
                 'video':{k:video.get(k) for k in ('cid','duration')}, 'cover_verified':cover_ok, 'public_verified':False}
     if archive.get('state') == 0 and cover_ok:

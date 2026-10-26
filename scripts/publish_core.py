@@ -599,6 +599,24 @@ def preflight(manifest, ident, profile):
     return dict(report, target_id=ident, endpoint=target['endpoint'], local_only=True)
 
 
+def safe_adapter_failure(stderr):
+    """Expose only recognized codes, never adapter prose, URLs or credentials."""
+    if not isinstance(stderr, str) or len(stderr) > 16_384: return ''
+    try: value = json.loads(stderr)
+    except (ValueError, TypeError): return ''
+    if not isinstance(value, dict) or value.get('error_type') != 'WechatError': return ''
+    code = value.get('errcode')
+    hints = {
+        40007:'媒体或草稿 ID 无效；核对原账号和原 ID，不自动新建替代稿',
+        40001:'访问令牌无效', 42001:'访问令牌过期',
+        40013:'AppID 不正确', 40125:'AppSecret 不正确',
+        40164:'调用出口不在公众号 IP 白名单', 40165:'调用出口不在公众号 IP 白名单',
+        45009:'接口调用次数达到限制', 48001:'当前账号没有该接口权限',
+    }
+    if type(code) is not int or code not in hints: return ''
+    return f'；微信 errcode={code}：{hints[code]}'
+
+
 def invoke(config, action, request_path, *, lock_fd):
     # argv is trusted local configuration, never a command supplied by article text.
     argv = [*config[action], "--request", str(request_path)]
@@ -622,7 +640,9 @@ def invoke(config, action, request_path, *, lock_fd):
         raise PublishError(f"适配器 {action} 未完成（{type(exc).__name__}）；必须先查询，不重复发送") from exc
     if result.returncode != 0:
         # Do not echo arbitrary adapter stderr, which may contain tokens/URLs.
-        raise PublishError(f"适配器 {action} 失败（exit={result.returncode}）；详情由适配器脱敏记录")
+        detail = safe_adapter_failure(result.stderr)
+        raise PublishError(f"适配器 {action} 失败（exit={result.returncode}）" +
+                           (detail or '；适配器没有可公开的结构化错误码；原始响应不回显'))
     try:
         value = json.loads(result.stdout)
     except ValueError as exc:
