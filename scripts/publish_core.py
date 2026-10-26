@@ -652,7 +652,7 @@ def invoke(config, action, request_path, *, lock_fd):
     return value
 
 
-def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None):
+def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat"):
     # A live executor must not be reclassified by a concurrent "not found" query.
     # A foreground child inherits the lock even if its parent dies.
     manifest = read_json(manifest_path)
@@ -669,23 +669,24 @@ def run(manifest_path, ident, profile, store, *, resume=False, advance=False, ad
             raise PublishError("该账号执行器仍在运行，不能并发提交或读回重置") from exc
         # Close our reference without LOCK_UN: an orphan child may still own it.
         return _run_locked(manifest, ident, profile, store, resume=resume, advance=advance, adopt=adopt,
-                           recover_remote_id=recover_remote_id, lock_fd=stream.fileno())
+                           recover_remote_id=recover_remote_id, recovery_platform=recovery_platform, lock_fd=stream.fileno())
 
 
-def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, lock_fd):
+def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", lock_fd):
     if not resume:
         validate(manifest)
     target = target_of(manifest, ident)
     key = store.key(manifest, target)
     job = store.status(key)
     if recover_remote_id is not None:
-        _nonempty(recover_remote_id, '候选公众号草稿 ID')
-        if (not resume or advance or adopt or target['platform'] != 'wechat' or target['endpoint'] != 'draft'
+        _nonempty(recover_remote_id, '候选远端 ID')
+        allowed_recovery = (recovery_platform=='wechat' and target['platform']=='wechat' and target['endpoint']=='draft') or (recovery_platform in {'x','weibo'} and target['platform']==recovery_platform and target['endpoint']=='publish')
+        if (not resume or advance or adopt or not allowed_recovery
                 or job['state'] != 'submission_unknown' or job.get('remote_id')):
-            raise PublishError('恢复绑定只适用于无远端 ID 的公众号未知提交任务')
+            raise PublishError('恢复绑定只适用于平台与终点匹配、无远端 ID 的未知提交任务')
         if store.db.execute('SELECT 1 FROM jobs WHERE platform=? AND account=? AND remote_id=? AND key<>?',
                             (job['platform'], job['account'], recover_remote_id, key)).fetchone():
-            raise PublishError('候选草稿已归属其他发布任务')
+            raise PublishError('候选草稿或作品已归属其他发布任务')
     if not resume and job["state"] in {"draft_ready", "prefill_ready", "published", "broadcasted"}:
         if job['state'] == 'prefill_ready' and store.needs_live_readback(key):
             # A local editor target is not a saved platform draft. Recheck that
@@ -709,6 +710,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
                "target": target, "job": job}
     if recover_remote_id is not None:
         request['recovery_remote_id'] = recover_remote_id
+        request['recovery_platform'] = recovery_platform
     if advance:
         if target['platform']!='wechat' or target['endpoint']!='draft':
             raise PublishError('advance 当前只允许公众号已建草稿补原生媒体')
@@ -752,5 +754,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         observation = invoke(config, "verify", request_path, lock_fd=lock_fd)
         if recover_remote_id is not None and (observation.get('remote_id') != recover_remote_id
                 or observation.get('recovery_verified') is not True):
-            raise PublishError('候选草稿未经官方正文与封面核验，保持未知提交状态')
+            message = ('候选草稿未经官方正文与封面核验' if recovery_platform=='wechat'
+                       else '候选作品未经平台身份、内容与原媒体来源核验')
+            raise PublishError(message+'，保持未知提交状态')
         return store.save_observation(key, observation, verified=True)

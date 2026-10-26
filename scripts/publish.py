@@ -24,8 +24,9 @@ def main():
     p.add_argument("key"); p.add_argument("--article-dir", required=True); p.add_argument("--write-scripts", required=True)
     p = sub.add_parser("resume-job", help="源文件或交接清单丢失时，按账本 key 只读恢复")
     p.add_argument("key")
-    p = sub.add_parser('recover-wechat', help='官方只读核对候选草稿后绑定未知任务，不新建稿')
-    p.add_argument('key'); p.add_argument('--remote-id', required=True)
+    for name in ('recover-wechat','recover-x','recover-weibo'):
+        p = sub.add_parser(name, help='只读核对明确候选身份后恢复未知任务，不重新提交')
+        p.add_argument('key'); p.add_argument('--remote-id', required=True)
     for name in ("prepare", "authorize", "run", "resume", "advance", "adopt"):
         p = sub.add_parser(name); p.add_argument("manifest"); p.add_argument("--target", required=True)
         if name == "authorize":
@@ -81,10 +82,11 @@ def main():
             elif args.action == "return-write":
                 from write_bridge import return_to_write
                 result = return_to_write(store,args.key,load_profile(args.profile),args.article_dir,args.write_scripts)
-            elif args.action in {"resume-job", "recover-wechat"}:
+            elif args.action in {"resume-job", "recover-wechat", "recover-x", "recover-weibo"}:
                 job = store.status(args.key)
                 result = run(store.directory / "snapshots" / f"{args.key}.json", job["target_id"], load_profile(args.profile), store,
-                             resume=True, recover_remote_id=args.remote_id if args.action == 'recover-wechat' else None)
+                             resume=True, recover_remote_id=args.remote_id if args.action.startswith('recover-') else None,
+                             recovery_platform=args.action.removeprefix('recover-') if args.action.startswith('recover-') else 'wechat')
             elif args.action in {"run", "resume", "advance", "adopt"}:
                 result = run(args.manifest, args.target, load_profile(args.profile), store,
                              resume=args.action == "resume",advance=args.action == "advance",adopt=args.action == "adopt")

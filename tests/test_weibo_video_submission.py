@@ -58,6 +58,25 @@ class InputContract(unittest.TestCase):
         self.assertEqual(result['media_id'],VID);self.assertEqual(result['statement'],4)
         self.assertEqual(result['cover_pid'],PID)
 
+    def test_native_fingerprint_and_exact_empty_portrait_cover_slot(self):
+        p=params(self.pack,4);p['fp']='synthetic-native-fingerprint'
+        native.native_input(Request(p),self.pack,self.saved,self.snapshot)
+        self.saved['native_video'].update(width=1080,height=1920)
+        c=self.saved['cover'];c['prepared'].update(width=675,height=900)
+        c['crop'].update(width=675,height=900,aspect_ratio=3/4)
+        c['crop']['crop'].update(width=675,height=900)
+        media=json.loads(p['media']);media['covers'][0].update(width=675,height=900)
+        media['covers'].append(dict(type=1,source=1));p['media']=json.dumps(media)
+        native.native_input(Request(p),self.pack,self.saved,self.snapshot)
+        for second in (dict(type=True,source=1),dict(type=2,source=1),dict(type=1,source=1,pid='Other'),
+                       dict(type=1,source=11),{}):
+            changed=copy.deepcopy(media);changed['covers'][1]=second
+            with self.subTest(second=second),self.assertRaises(PublishError):
+                native.native_input(Request(dict(p,media=json.dumps(changed))),self.pack,self.saved,self.snapshot)
+        for fp in ('','x'*16385,['one','two']):
+            with self.subTest(fp_type=type(fp).__name__),self.assertRaises(PublishError):
+                native.native_input(Request(dict(p,fp=fp)),self.pack,self.saved,self.snapshot)
+
     def test_empty_composer_missing_fields_and_changed_scope_rejected(self):
         for value in ({},dict(composers=[],statement=[])):
             with self.assertRaises(PublishError):native.composer_state(value,self.pack)
@@ -111,6 +130,7 @@ class Button:
     def count(self):return 1
     def is_visible(self):return True
     def is_disabled(self):return False
+    def scroll_into_view_if_needed(self,**kwargs):pass
 
 
 class Page:
@@ -317,6 +337,41 @@ class SenderCore(unittest.TestCase):
         saved=read_json(home.marker_path(self.request));self.assertNotIn('accepted',saved)
         with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True)
         self.assertEqual(self.page.clicks,1)
+
+    def test_lost_acceptance_recovers_only_same_video_then_rechecks_on_normal_resume(self):
+        self.mode='media_id_only'
+        with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store)
+        result=run(self.path,'weibo',self.profile,self.store,resume=True,recover_remote_id=RID,recovery_platform='weibo')
+        self.assertEqual(result['state'],'published');self.assertEqual(result['remote_id'],RID)
+        self.assertTrue(self.readback_result()['recovery_verified'])
+        self.assertEqual(run(self.path,'weibo',self.profile,self.store,resume=True)['state'],'published')
+        self.readback['public']['statement']=4
+        with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True)
+        self.assertEqual((self.uploads,self.fills,self.page.clicks),(1,1,1))
+
+    def test_candidate_recovery_mutations_cannot_claim_or_repeat_submission(self):
+        self.mode='media_id_only'
+        with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store)
+        marker=home.marker_path(self.request);original=read_json(marker)
+        mutations=[dict(native_input_checkpointed_at=None),dict(native_input_count=0),dict(native_response_count=2),
+                   dict(pack_digest='wrong'),dict(source_sha256='f'*64),dict(accepted=dict(remote_id=RID,identity=UID))]
+        for mutation in mutations:
+            write_json(marker,dict(original,**mutation))
+            with self.subTest(mutation=mutation),self.assertRaises(PublishError):
+                run(self.path,'weibo',self.profile,self.store,resume=True,recover_remote_id=RID,recovery_platform='weibo')
+            self.assertIsNone(self.store.status(self.key)['remote_id'])
+        write_json(marker,original)
+        for candidate,platform in [('111','weibo'),(RID,'x')]:
+            with self.subTest(candidate=candidate,platform=platform),self.assertRaises(PublishError):
+                run(self.path,'weibo',self.profile,self.store,resume=True,recover_remote_id=candidate,recovery_platform=platform)
+        for changes in (dict(statement=4),dict(title='其他集')):
+            previous=copy.deepcopy(self.readback);self.readback['public'].update(changes)
+            with self.subTest(changes=changes),self.assertRaises(PublishError):
+                run(self.path,'weibo',self.profile,self.store,resume=True,recover_remote_id=RID,recovery_platform='weibo')
+            self.readback=previous
+        self.readback['edit']['playlists']=['unselected']
+        with self.assertRaises(PublishError):run(self.path,'weibo',self.profile,self.store,resume=True,recover_remote_id=RID,recovery_platform='weibo')
+        self.assertEqual((self.uploads,self.fills,self.page.clicks),(1,1,1))
 
 
 if __name__=='__main__':unittest.main()

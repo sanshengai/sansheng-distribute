@@ -9,7 +9,7 @@ import re
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from browser_runtime import background_tab, render_background_page
+from browser_runtime import background_tab, background_window, render_background_page
 from publish_core import PublishError, digest
 
 
@@ -48,9 +48,9 @@ def _expand(text, entities):
     return html.unescape(encoded.decode('utf-16-le'))
 
 
-def acceptance_identity(result, identity=None):
+def acceptance_identity(result, identity=None, *, require_typename=True):
     """Retain an actual own-post ID even if later content checks cannot finish."""
-    if not isinstance(result, dict) or result.get('__typename') != 'Tweet':
+    if (not isinstance(result, dict) or result.get('__typename') not in ({'Tweet'} if require_typename else {None,'Tweet'})):
         raise PublishError('X 返回的不是可核对的普通作品')
     legacy = result.get('legacy', {})
     user = result.get('core', {}).get('user_results', {}).get('result', {})
@@ -144,7 +144,15 @@ def verify_facts(value, pack, identity, *, remote_id=None, author_id=None, expec
         raise PublishError('X 普通公开文字帖的媒体、回复、引用或可见性不能核对')
     if pack.get('content_type', 'text') == 'video':
         check_publication_media(pack, expected_media)
-        if value['media_count'] != 1 or value.get('media') != [expected_media['native']]:
+        actual=value.get('media');expected=expected_media['native']
+        matched=isinstance(actual,list) and len(actual)==1 and isinstance(actual[0],dict)
+        if matched:
+            observed=dict(actual[0]);duration=observed.pop('duration_millis',None)
+            reference=dict(expected);wanted=reference.pop('duration_millis',None)
+            # MP4 native metadata rounds fractional milliseconds; X truncates.
+            matched=(observed==reference and type(duration) is int and type(wanted) is int
+                     and duration>0 and wanted>0 and abs(duration-wanted)<=1)
+        if value['media_count'] != 1 or not matched:
             raise PublishError('X 已发布视频身份、尺寸、时长或可用状态与原片回执不符')
     elif pack.get('content_type') == 'images':
         check_publication_media(pack, expected_media)
@@ -213,7 +221,7 @@ class Capture:
     """Persist the actual native acceptance ID before click completion returns."""
     def __init__(self, pack, identity, save):
         self.pack, self.identity, self.save = pack, identity, save
-        self.accepted = None; self.error = None; self.count = 0
+        self.accepted = None; self.error = None; self.count = 0; self.diagnostic = None
 
     def response(self, response):
         parts = urlsplit(response.url)
@@ -228,11 +236,17 @@ class Capture:
             if not isinstance(body, dict) or body.get('errors'):
                 raise PublishError('X 原生投稿返回错误；不重复点击')
             result = body['data']['create_tweet']['tweet_results']['result']
-            value = acceptance_identity(result, self.identity)
+            user=result.get('core',{}).get('user_results',{}).get('result',{})
+            self.diagnostic=dict(result_type=result.get('__typename'), result_keys=list(result),
+                legacy_keys=list(result.get('legacy',{})), user_keys=list(user))
+            # CreateTweet omits __typename in the observed native response;
+            # TweetDetail still requires it. IDs and author bindings stay exact.
+            value = acceptance_identity(result, self.identity, require_typename=False)
             accepted = dict(value, observed_at=time.time(), response_digest=digest(body))
             self.save(accepted)
             self.accepted = accepted
-        except Exception:
+        except Exception as exc:
+            self.diagnostic=dict(self.diagnostic or {},error=str(exc) if isinstance(exc,PublishError) else type(exc).__name__)
             self.error = 'X 原生受理回执未能完整核对或保存；保持未知，不重复点击'
 
 
@@ -258,10 +272,12 @@ def detail_result(body, remote_id):
     return facts(next(iter(matches.values())))
 
 
-def readback(anchor, pack, identity, accepted, *, expected_media=None):
+def readback(anchor, pack, identity, accepted, *, expected_media=None, cdp_url=None):
     remote_id = accepted.get('remote_id'); url = status_url(identity, remote_id)
     bodies = []; errors = []
-    with background_tab(anchor) as page:
+    surface = (background_window(anchor, cdp_url=cdp_url)
+               if pack.get('content_type') == 'video' else background_tab(anchor))
+    with surface as page:
         def observe(response):
             parts = urlsplit(response.url)
             if (parts.scheme == 'https' and parts.netloc == 'x.com'
@@ -305,8 +321,9 @@ def readback(anchor, pack, identity, accepted, *, expected_media=None):
                 raise PublishError('X 原作品可见完整文案或原生链接与封存内容不符')
             if pack.get('content_type', 'text') == 'video':
                 players = article.locator('[data-testid="videoPlayer"]')
+                players.first.wait_for(state='visible', timeout=15000)
                 if (players.count() != 1 or not players.is_visible()
-                        or article.locator('[data-testid="tweetPhoto"]').count()):
+                        or article.locator('[data-testid="tweetPhoto"]:not(:has([data-testid="videoPlayer"]))').count()):
                     raise PublishError('X 原视频页没有唯一可见播放器或出现额外图片')
             elif pack.get('content_type') == 'images':
                 photos = article.locator('[data-testid="tweetPhoto"]')

@@ -22,6 +22,20 @@ def events(size,stamp=1000):
                                       ('FINALIZE',200,final),('STATUS',200,ready)])]
 
 
+class IntermediateReceiptTests(unittest.TestCase):
+    def test_sparse_processing_status_then_complete_success(self):
+        rows=events(100)
+        body=dict(media_id_string='12345',media_key='7_12345',processing_info={'state':'in_progress'})
+        rows.insert(-1,dict(command='STATUS',status=200,observed_at=1002.5,body=body))
+        self.assertEqual(x_video.cloud_receipt(rows,100,now=1005)['size'],100)
+        for field,value in [('media_id_string','999'),('size',101),('expires_after_secs',0)]:
+            changed=copy.deepcopy(rows);changed[-2]['body'][field]=value
+            with self.assertRaises(PublishError):x_video.cloud_receipt(changed,100,now=1005)
+        for field in ['size','expires_after_secs','media_id_string']:
+            changed=copy.deepcopy(rows);del changed[-1]['body'][field]
+            with self.assertRaises(PublishError):x_video.cloud_receipt(changed,100,now=1005)
+
+
 class CloudReceiptTests(unittest.TestCase):
     def test_native_success_with_immutable_identity_size_and_expiry(self):
         value=x_video.cloud_receipt(events(100),100,now=1005)
@@ -99,10 +113,13 @@ class Page(base.Page):
     def __init__(self):
         super().__init__();self.uploads=[];self.video=None;self.listeners=[];self.crash_after_upload=False
     def goto(self,url,**kwargs):self.url=url
+    def close(self):self.closed=True
     def on(self,event,callback):self.listeners.append(callback)
     def remove_listener(self,event,callback):self.listeners.remove(callback)
     def wait_for_function(self,*args,**kwargs):pass
     def locator(self,selector):
+        if 'typeaheadDropdownWrapped' in selector:
+            return type('Popup',(),{'count':lambda _:0})()
         return Node(self,'file' if 'fileInput' in selector else 'editor' if 'tweetTextarea' in selector else
                     'switch' if 'AccountSwitcher' in selector else 'link' if 'Profile_Link' in selector else
                     'modal' if 'aria-modal' in selector else 'alert')
@@ -119,7 +136,7 @@ class XVideoDispatchTests(unittest.TestCase):
         def window(anchor,**kwargs):
             self.assertIs(anchor,self.anchor);self.assertTrue(kwargs['retain']);self.windows.append(self.page)
             yield self.page
-        def select(connection,platform,*,path,target_id=None):
+        def select(connection,platform,*,path=None,target_id=None):
             if path=='/home':return self.anchor
             if target_id!=self.page.context.ident:raise PublishError('会话丢失')
             return self.page

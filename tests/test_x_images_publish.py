@@ -82,7 +82,10 @@ class ImageNode(images.Node):
 class Composer(images.Page):
     def __init__(self):
         super().__init__(); self.listeners={}; self.clicks=0; self.drop_finalize=False
+    def close(self):self.closed=True
     def locator(self, selector):
+        if 'typeaheadDropdownWrapped' in selector:
+            return type('Popup',(),{'count':lambda _:0})()
         if 'tweetButton' in selector: return posts.Button()
         node=super().locator(selector)
         result=ImageNode(self,node.kind); result.wait_for=lambda **kw:None

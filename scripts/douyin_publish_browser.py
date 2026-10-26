@@ -193,6 +193,9 @@ def dispatch(request_path,action,profile,lock_fd):
     pack=build_pack(manifest,target['id'],profile,check_files=action=='execute');check_pack(pack)
     marker=home.marker_path(request_path)
     bound=dict(pack_digest=digest(pack),identity=identity,cdp_url=endpoint,browser_profile=browser)
+    from browser_preinput import recover
+    recovered = recover(action, request, pack, bound, marker, profile)
+    if recovered is not None: return recovered
     if action=='execute' and marker.exists():raise PublishError('抖音已有尝试；只查询，不重新上传或填报')
     if action=='verify':
         saved=read_json(marker);accepted=saved.get('accepted',{})

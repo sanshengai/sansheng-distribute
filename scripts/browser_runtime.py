@@ -99,7 +99,9 @@ def connect(profile, *, writing=False):
         raise PublishError('浏览器依赖未准备；使用 setup.py --prepare-runtime') from exc
     lease = profile_lease(browser) if writing else contextlib.nullcontext()
     with lease, sync_playwright() as pw:
-        connection = pw.chromium.connect_over_cdp(url, timeout=15000, no_defaults=True)
+        # Only the validated loopback endpoint and dedicated profile are supported.
+        # Playwright 1.62 otherwise treats CDP as remote and refuses files >50MB.
+        connection = pw.chromium.connect_over_cdp(url, timeout=15000, no_defaults=True, is_local=True)
         assert_profile(connection.new_browser_cdp_session(), browser)
         # Stop only our Playwright driver on exit; never close/restart the user's Chrome.
         yield connection

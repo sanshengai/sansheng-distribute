@@ -107,6 +107,11 @@ def native_input(request,pack,saved,snapshot):
         required={'content','visible','share_id','media','vote'};statement=snapshot['statement']
         if type(statement) is not int or statement not in {0,1,2,3,4} or saved.get('pack_digest')!=digest(pack):raise ValueError()
         allowed=required|({'mblog_statement'} if statement else set())
+        # The native creator may add an opaque anti-abuse fingerprint. Observe
+        # its presence only; never persist, synthesize or reuse its value.
+        if 'fp' in pairs:
+            if len(pairs['fp'])!=1 or not 0<len(pairs['fp'][0])<=16384:raise ValueError()
+            allowed=allowed|{'fp'}
         if (set(pairs)!=allowed or any(len(v)!=1 for v in pairs.values())
                 or pairs['content']!=[pack['fields']['composed_text']] or pairs['visible']!=['0']
                 or pairs['share_id']!=[''] or pairs['vote']!=['']
@@ -129,6 +134,14 @@ def native_input(request,pack,saved,snapshot):
         if (len(creations)!=1 or creations[0]!={'channel_ids':[''],'type':CREATION_TYPES[pack['platform_metadata']['creation_type']]}
                 or type(creations[0].get('type')) is not int):raise ValueError()
         covers=media.get('covers')
+        # Observed portrait creator includes one empty landscape-slot marker,
+        # not a second uploaded picture. Accept only this exact empty marker.
+        if (isinstance(covers,list) and len(covers)==2 and covers[1]=={'type':1,'source':1}
+                and all(type(covers[1][k]) is int for k in ('type','source'))
+                and native['width']*16==native['height']*9
+                and isinstance(covers[0],dict) and type(covers[0].get('width')) is int
+                and type(covers[0].get('height')) is int and covers[0]['width']*4==covers[0]['height']*3):
+            covers=covers[:1]
         if (not isinstance(covers,list) or len(covers)!=1 or not isinstance(covers[0],dict)
                 or set(covers[0])-{'pid','source','width','height'}
                 or covers[0].get('pid')!=snapshot['cover_pid']

@@ -80,7 +80,14 @@ def preview(page,pid):
     if link.count()!=1 or not link.is_visible():raise PublishError('微博封面字段不能唯一核对')
     node=link.locator('..').locator('..').locator('.woo-picture-main > img')
     if node.count()!=1 or not node.is_visible():raise PublishError('微博封面预览不能唯一核对')
-    value=node.evaluate('(n)=>({src:n.currentSrc,complete:n.complete,width:n.naturalWidth,height:n.naturalHeight})')
+    value=node.evaluate('''async(n)=>{
+      if(!n.complete)await new Promise(resolve=>{
+        const done=()=>{clearTimeout(timer);n.removeEventListener('load',done);n.removeEventListener('error',done);resolve();};
+        const timer=setTimeout(done,10000);n.addEventListener('load',done);n.addEventListener('error',done);
+        if(n.complete)done();
+      });
+      return {src:n.currentSrc,complete:n.complete,width:n.naturalWidth,height:n.naturalHeight};
+    }''')
     u=urlsplit(value.get('src',''))
     if (u.scheme!='https' or not re.fullmatch(r'(?:[A-Za-z0-9-]+\.)*sinaimg\.cn',u.netloc)
             or Path(u.path).stem!=pid or value.get('complete') is not True

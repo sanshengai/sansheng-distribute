@@ -27,10 +27,16 @@ def video_tweet(text):
 
 class Article(post.Articles):
     def locator(self, selector):
-        if selector in ('[data-testid="videoPlayer"]','[data-testid="tweetPhoto"]'):
+        if selector in ('[data-testid="videoPlayer"]','[data-testid="tweetPhoto"]',
+                        '[data-testid="tweetPhoto"]:not(:has([data-testid="videoPlayer"]))'):
             page = self.page
             class Media:
-                def count(self):return page.players if 'videoPlayer' in selector else page.photos
+                @property
+                def first(self):return self
+                def wait_for(self,**kwargs):pass
+                def count(self):
+                    if selector=='[data-testid="videoPlayer"]':return page.players
+                    return page.photos if ':not' in selector else page.photos+page.video_wrappers
                 def is_visible(self):return page.player_visible
             return Media()
         return super().locator(selector)
@@ -38,7 +44,7 @@ class Article(post.Articles):
 
 class Detail(post.DetailPage):
     def __init__(self, result):
-        super().__init__(result);self.players=1;self.photos=0;self.player_visible=True
+        super().__init__(result);self.players=1;self.photos=0;self.video_wrappers=0;self.player_visible=True
     def locator(self, selector):return Article(self)
 
 
@@ -59,8 +65,9 @@ class XVideoPublicationTests(unittest.TestCase):
         self.clicks=0;self.click_receipts=[];self.mode='ok'
         patch.object(publisher,'background_window',side_effect=upload.x_video_browser.background_window.side_effect).start()
         @contextlib.contextmanager
-        def detail_window(anchor):yield self.detail
+        def detail_window(anchor,**kwargs):yield self.detail
         patch.object(x_post,'background_tab',side_effect=detail_window).start()
+        patch.object(x_post,'background_window',side_effect=detail_window).start()
         def click(page,button,*,before_input):
             before_input()
             saved=read_json(engine.marker_path(self.request))
@@ -95,6 +102,36 @@ class XVideoPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(PublishError,'受理身份'):run(self.path,'x',self.profile,self.store,resume=True)
         self.assertEqual(self.clicks,1);self.assertEqual(len(self.page.uploads),1)
 
+    def lose_acceptance(self):
+        self.mode='missing_receipt'
+        with self.assertRaises(PublishError):run(self.path,'x',self.profile,self.store)
+        self.page.url='https://x.com/home'
+
+    def test_candidate_recovers_same_video_without_upload_or_send(self):
+        self.lose_acceptance()
+        result=run(self.path,'x',self.profile,self.store,resume=True,
+                   recover_remote_id='123456789',recovery_platform='x')
+        self.assertEqual(result['state'],'published');self.assertEqual(result['remote_id'],'123456789')
+        self.assertEqual((self.clicks,len(self.page.uploads)),(1,1))
+        self.assertEqual(run(self.path,'x',self.profile,self.store,resume=True)['state'],'published')
+
+    def test_candidate_requires_native_attempt_source_and_independent_same_content(self):
+        self.lose_acceptance();marker=engine.marker_path(self.request);original=read_json(marker)
+        for field,value in [('native_input_checkpointed_at',None),('native_response_count',0),
+                            ('native_response_count',2),('submission_protocol',1)]:
+            write_json(marker,dict(original,**{field:value}))
+            with self.subTest(field=field),self.assertRaises(PublishError):
+                run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id='123456789',recovery_platform='x')
+            self.assertIsNone(self.store.status(self.key)['remote_id'])
+        write_json(marker,original)
+        for platform,candidate in [('wechat','123456789'),('weibo','123456789'),('x','999')]:
+            with self.subTest(platform=platform,candidate=candidate),self.assertRaises(PublishError):
+                run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id=candidate,recovery_platform=platform)
+        changed=copy.deepcopy(original);changed['publication_media']['source_sha256']='0'*64;write_json(marker,changed)
+        with self.assertRaises(PublishError):
+            run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id='123456789',recovery_platform='x')
+        self.assertEqual((self.clicks,len(self.page.uploads)),(1,1))
+
     def test_wrong_post_media_keeps_actual_post_identity_and_rejects_publication(self):
         self.detail.result['legacy']['extended_entities']['media'][0]['id_str']='999'
         self.detail.result['legacy']['entities']['media'][0]['id_str']='999'
@@ -114,11 +151,21 @@ class XVideoPublicationTests(unittest.TestCase):
         self.assertEqual(run(self.path,'x',self.profile,self.store,resume=True)['state'],'published')
         self.assertEqual(self.clicks,1)
 
+    def test_native_video_photo_wrapper_is_allowed_but_additional_photo_is_rejected(self):
+        self.detail.video_wrappers=1
+        self.assertEqual(run(self.path,'x',self.profile,self.store)['state'],'published')
+        self.detail.photos=1
+        with self.assertRaisesRegex(PublishError,'额外图片'):
+            run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual((self.clicks,len(self.page.uploads)),(1,1))
+
     def test_incomplete_cloud_transcript_stops_before_final_send(self):
         with patch.object(upload.x_video,'cloud_receipt',side_effect=PublishError('incomplete upload receipt')):
             with self.assertRaisesRegex(PublishError,'upload receipt'):run(self.path,'x',self.profile,self.store)
         self.assertEqual(self.clicks,0);self.assertEqual(len(self.page.uploads),1)
-        with self.assertRaisesRegex(PublishError,'受理身份'):run(self.path,'x',self.profile,self.store,resume=True)
+        result=run(self.path,'x',self.profile,self.store,resume=True)
+        self.assertEqual(result['state'],'prepared')
+        self.assertEqual(self.clicks,0)
         self.assertEqual(len(self.page.uploads),1)
 
     def test_tampered_source_binding_rejected_during_readonly_resume(self):
@@ -155,7 +202,7 @@ class XVideoPublicationTests(unittest.TestCase):
         self.assertEqual(saved['click_error_phase'],'before_native_input')
         self.assertNotIn('native_input_checkpointed_at',saved)
         self.assertEqual((self.clicks,len(self.page.uploads)),(0,1))
-        with self.assertRaisesRegex(PublishError,'受理身份'):
+        with self.assertRaisesRegex(PublishError,'实际字节'):
             run(self.path,'x',self.profile,self.store,resume=True)
         self.assertEqual((self.clicks,len(self.page.uploads)),(0,1))
 
@@ -185,12 +232,21 @@ class VideoFactsTests(unittest.TestCase):
     def test_identity_type_dimensions_duration_and_availability_are_required(self):
         original=x_post.facts(self.result)
         for field,value in [('media_id','9'),('media_key','other'),('type','photo'),('width',0),
-                            ('height',720),('duration_millis',3999),('availability','Unavailable')]:
+                            ('height',720),('duration_millis',3998),('availability','Unavailable')]:
             changed=copy.deepcopy(original);changed['media'][0][field]=value
             with self.subTest(field=field),self.assertRaises(PublishError):
                 x_post.verify_facts(changed,self.pack,'@demo',expected_media=self.expected)
         for expected in (None,{},dict(self.expected,source_asset_id='other'),dict(self.expected,source_sha256='0'*64)):
             with self.assertRaises(PublishError):x_post.verify_facts(original,self.pack,'@demo',expected_media=expected)
+
+    def test_fractional_millisecond_rounding_only(self):
+        for duration in (3999,4000,4001):
+            value=x_post.facts(self.result);value['media'][0]['duration_millis']=duration
+            self.assertEqual(x_post.verify_facts(value,self.pack,'@demo',expected_media=self.expected),value)
+        for duration in (3998,4002,0,True,4000.0,None):
+            value=x_post.facts(self.result);value['media'][0]['duration_millis']=duration
+            with self.subTest(duration=duration),self.assertRaises(PublishError):
+                x_post.verify_facts(value,self.pack,'@demo',expected_media=self.expected)
 
 
 if __name__=='__main__':unittest.main()

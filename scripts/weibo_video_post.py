@@ -100,7 +100,20 @@ def facts(body):
     # Never trim authored whitespace or an arbitrary URL. Only one exact native
     # media entity at the final position can be treated as a transport suffix.
     suffix=' '+transport
-    authored=text[:-len(suffix)] if text.endswith(suffix) else None
+    authored=None
+    # Native video creator appends exactly one space and three zero-width
+    # markers after its transport link. Do not trim authored whitespace.
+    for ending in (suffix,suffix+' '+'\u200b'*3):
+        if text.endswith(ending):authored=text[:-len(ending)];break
+    topics=[];native_topics=body.get('topic_struct',[])
+    if not isinstance(native_topics,list):raise PublishError('微博原生话题列表格式无效')
+    for topic in native_topics:
+        topic_title=topic.get('topic_title') if isinstance(topic,dict) else None
+        u=urlsplit(topic.get('topic_url','')) if isinstance(topic,dict) else None
+        if (not isinstance(topic_title,str) or not topic_title or u.scheme!='sinaweibo' or u.netloc!='searchall'
+                or parse_qs(u.query).get('q')!=['#'+topic_title+'#'] or topic_title in topics):
+            raise PublishError('微博原生话题身份或顺序不能核对')
+        topics.append(topic_title)
     declarations=body.get('content_auth_list')
     statement=None
     if declarations is not None:
@@ -111,7 +124,34 @@ def facts(body):
                 raise PublishError('微博视频公开内容声明缺失或矛盾')
             statement=values[0]
     return dict(who,media_id=vid,title=title,duration=duration,cover_pid=cover,
-                text=text,authored_text=authored,url_mappings=urls,statement=statement)
+                text=text,authored_text=authored,url_mappings=urls,statement=statement,topics=topics)
+
+
+def authored_matches(public,fields):
+    expected=fields['composed_text']
+    if expected in (public['text'],public['authored_text']):return True
+    names=[tag.strip('#') for tag in fields.get('tags',[])]
+    separated=' '.join('#'+name+'#' for name in names)
+    # Only the generated final topic group may lose its separators. Native
+    # topic entities must establish every name and its original order.
+    return bool(names and public.get('topics')==names and expected.endswith(separated)
+                and public['authored_text']==expected[:-len(separated)]+separated.replace('# #','##'))
+
+
+def public_duration_matches(fractional,seconds):
+    # Public/native edit responses expose different precision. Exact source
+    # milliseconds are checked independently; only observed integer encodings
+    # (truncation or nearest second) are accepted here.
+    return (type(seconds) is int and seconds in {math.floor(fractional),math.floor(fractional+0.5)})
+
+
+def edit_duration_matches(source,edit):
+    milliseconds=source*1000;expected=math.floor(milliseconds);actual=round(edit*1000)
+    if abs(edit*1000-actual)>1e-7:return False
+    # At an exact millisecond boundary the native edit service can truncate
+    # one floating-point ULP below it (104.7 -> 104.699, observed live).
+    allowed={expected,expected-1} if milliseconds.is_integer() else {expected}
+    return actual in allowed
 
 
 def edit_facts(body, public):
@@ -134,9 +174,7 @@ def edit_facts(body, public):
                 or creation[0]['type'] not in CREATION_TYPES.values()
                 or any(type(v.get(k)) is not int or v[k]<=0 for k in ('width','height'))
                 or type(v.get('duration')) not in (int,float) or not math.isfinite(v['duration'])
-                # The observed native public response floors fractional seconds;
-                # the author edit response preserves them (45 versus 45.95).
-                or math.floor(v['duration'])!=public['duration'] or not isinstance(v.get('current_playlists'),list)):
+                or not public_duration_matches(v['duration'],public['duration']) or not isinstance(v.get('current_playlists'),list)):
             raise ValueError()
         return dict(remote_id=public['remote_id'],media_id=public['media_id'],title=public['title'],
                     cover_pid=public['cover_pid'],creation_type=next(k for k,n in CREATION_TYPES.items() if n==creation[0]['type']),
@@ -267,14 +305,15 @@ def bind_sources(pack, uid, accepted, saved, observation):
                 or public['mblogid']!=accepted.get('mblogid')
                 or edit['remote_id']!=accepted['remote_id'] or edit['media_id']!=public['media_id']
                 or public['title']!=pack['fields']['title'] or edit['title']!=public['title']
-                or pack['fields']['composed_text'] not in (public['text'],public['authored_text'])
+                or not authored_matches(public,pack['fields'])
                 or edit['creation_type']!=pack['platform_metadata']['creation_type']):raise ValueError()
         assets=pack['assets'];videos=[a for a in assets if a['kind']=='video'];images=[a for a in assets if a['kind']=='image']
         if len(videos)!=1 or len(videos)+len(images)!=len(assets):raise ValueError()
         native=upload.saved_source(videos[0],saved)
         if (native['media_id']!=public['media_id']
-                or any(edit[k]!=native[k] for k in ('width','height','duration'))
-                or math.floor(native['duration'])!=public['duration']):raise ValueError()
+                or any(edit[k]!=native[k] for k in ('width','height'))
+                or not edit_duration_matches(float(native['duration']),edit['duration'])
+                or not public_duration_matches(native['duration'],public['duration'])):raise ValueError()
         bindings=[dict(asset_id=videos[0]['id'],source_sha256=videos[0]['sha256'],native_media_id=native['media_id'])]
         if pack['cover_asset_id']:
             if len(images)!=1 or images[0]['id']!=pack['cover_asset_id']:raise ValueError()

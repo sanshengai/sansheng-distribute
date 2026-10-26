@@ -90,9 +90,9 @@ def preflight_browser(manifest, target, profile, argv):
             'final_click_available':target['platform']=='x' and target['endpoint']=='publish'}
 
 
-def assert_identity(page, expected):
+def assert_identity(page, expected, *, path="/compose/post"):
     parts = urlsplit(page.url)
-    if parts.scheme != 'https' or parts.netloc != 'x.com' or parts.path != '/compose/post':
+    if parts.scheme != 'https' or parts.netloc != 'x.com' or parts.path != path:
         raise PublishError('X 编辑页来源或路径改变；不猜测替代页面')
     switch = page.locator('[data-testid="SideNav_AccountSwitcher_Button"]')
     link = page.locator('a[data-testid="AppTabBar_Profile_Link"]')

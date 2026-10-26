@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import weibo_video_post as video
@@ -85,6 +86,29 @@ class Page:
 
 
 class VideoFacts(unittest.TestCase):
+    def test_native_topics_keep_video_title_and_validate_each_entity(self):
+        b=body();b['topic_struct']=[dict(topic_title=name,topic_url='sinaweibo://searchall?'+urlencode(dict(q='#'+name+'#')))
+                                  for name in ('英语学习','课堂故事')]
+        result=video.facts(b)
+        self.assertEqual(result['title'],'知识图解');self.assertEqual(result['topics'],['英语学习','课堂故事'])
+        video.edit_facts(edit_body(),result)
+        for bad in (None,{},'topic',[None],[dict(topic_title='课堂故事',topic_url='https://example.com/')],
+                    [dict(topic_title='课堂故事',topic_url='sinaweibo://searchall?q=%23other%23')],b['topic_struct']*2):
+            with self.subTest(bad=bad),self.assertRaises(PublishError):video.facts(dict(b,topic_struct=bad))
+
+    def test_only_exact_native_final_topic_spacing_and_transport_markers_are_accepted(self):
+        fields=dict(composed_text='正文 空格\n\n#英语学习# #课堂故事#',tags=['英语学习','课堂故事'])
+        public=dict(text='transport',authored_text='正文 空格\n\n#英语学习##课堂故事#',topics=['英语学习','课堂故事'])
+        self.assertTrue(video.authored_matches(public,fields))
+        for changed in (dict(topics=['课堂故事','英语学习']),dict(topics=['英语学习','other']),
+                        dict(authored_text='正文空格\n\n#英语学习##课堂故事#'),dict(topics=[])):
+            with self.subTest(changed=changed):self.assertFalse(video.authored_matches(dict(public,**changed),fields))
+        for count in (2,3,4):
+            b=body();ending=' '+'\u200b'*count
+            b['text_raw']+=ending;b['longText']['content']=b['text_raw'];b['text']+=ending
+            value=video.facts(b)
+            self.assertEqual(value['authored_text'] is not None,count==3)
+
     def test_complete_native_transport_and_unknown_declaration(self):
         value=video.facts(body())
         self.assertEqual(value['authored_text'],'第一段😀\n\n成套图解')
@@ -237,6 +261,28 @@ class SourceBinding(unittest.TestCase):
         self.assertEqual([a['asset_id'] for a in result['asset_bindings']],['video','cover'])
         self.assertNotIn('content_verified',result)
         self.assertNotIn('state',result)
+
+    def test_only_native_millisecond_truncation_of_source_duration_is_allowed(self):
+        for duration,accepted in ((45.95,True),(45.949,True),(45.948,False),(45.951,False),(45.9498,False)):
+            f=source_fixture();f[3]['edit']['duration']=duration
+            with self.subTest(duration=duration):
+                if accepted:self.bind(f)
+                else:
+                    with self.assertRaises(PublishError):self.bind(f)
+        f=source_fixture();f[2]['native_video']['duration']=45.950666
+        self.bind(f)
+        f[3]['edit']['duration']=45.949
+        with self.assertRaises(PublishError):self.bind(f)
+
+    def test_public_integer_seconds_can_round_but_source_milliseconds_stay_exact(self):
+        for seconds,accepted in ((45,True),(46,True),(44,False),(47,False),(True,False),(45.95,False)):
+            f=source_fixture();f[3]['public']['duration']=seconds
+            with self.subTest(seconds=seconds):
+                if accepted:self.bind(f)
+                else:
+                    with self.assertRaises(PublishError):self.bind(f)
+        p=video.facts(body());p['duration']=46
+        self.assertEqual(video.edit_facts(edit_body(),p)['duration'],45.95)
 
     def test_missing_prior_native_file_proof_cannot_be_rebuilt_from_public_video(self):
         for field,value in [('native_video',{}),('upload_events',[]),('upload_errors',['missing']),

@@ -49,7 +49,10 @@ class Button:
 class Composer(Page):
     def __init__(self):
         super().__init__(); self.listeners = {}; self.clicks = 0
+    def close(self):self.closed=True
     def locator(self, selector):
+        if 'typeaheadDropdownWrapped' in selector:
+            return type('Popup',(),{'count':lambda _:0})()
         if 'tweetButton' in selector:return Button()
         node = super().locator(selector)
         node.wait_for = lambda **kw: None
@@ -100,6 +103,17 @@ class DetailPage:
 
 class NativePostFactsTests(unittest.TestCase):
     def setUp(self):self.pack = dict(fields=dict(composed_text='完整文案'))
+
+    def test_only_native_acceptance_may_omit_typename(self):
+        value=tweet();del value['__typename']
+        with self.assertRaises(PublishError):x_post.facts(value)
+        rows=[];capture=x_post.Capture(self.pack,'@demo',rows.append)
+        capture.response(Response(dict(data=dict(create_tweet=dict(tweet_results=dict(result=value))))))
+        self.assertEqual(rows[0]['remote_id'],'123456789')
+        for change in ({'__typename':'TweetUnavailable'}, {'rest_id':'9'}, {'core':{}}, {'legacy':{}}):
+            c=x_post.Capture(self.pack,'@demo',rows.append)
+            c.response(Response(dict(data=dict(create_tweet=dict(tweet_results=dict(result=dict(value,**change)))))))
+            self.assertIsNone(c.accepted);self.assertIsNotNone(c.error)
 
     def test_actual_id_author_and_entire_content_required(self):
         value = x_post.detail_result(detail(tweet()), '123456789')

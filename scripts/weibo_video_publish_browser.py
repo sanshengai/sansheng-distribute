@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs,urlsplit
 
 from browser_assets import stage
 from browser_runtime import click_background
@@ -29,18 +29,59 @@ class Capture(shared.Capture):
     def __init__(self,uid,pack,saved,marker,snapshot):
         super().__init__(uid,lambda value:shared.checkpoint(saved,marker,accepted=value,state='accepted'))
         self.pack,self.saved,self.marker,self.snapshot=pack,saved,marker,snapshot
-        self.input_count=0;self.input_error=None
+        self.input_count=0;self.input_error=None;self.diagnostic={}
 
     def request(self,request):
         u=urlsplit(request.url)
         if u.scheme!='https' or u.netloc!='weibo.com' or u.path!='/ajax/statuses/update':return
         self.input_count+=1
         try:
+            self.diagnostic['request']=input_shape(request)
             if self.input_count!=1:raise PublishError('微博原生视频出现多个发送请求')
             value=submission.native_input(request,self.pack,self.saved,self.snapshot)
             shared.checkpoint(self.saved,self.marker,native_input_receipt=value)
-        except Exception:
+        except Exception as exc:
+            self.diagnostic['input_error_type']=type(exc).__name__
             self.input_error='微博原生视频发送载荷未能完整核对或保存；不重复发送'
+
+    def response(self,response):
+        u=urlsplit(response.url)
+        if u.scheme=='https' and u.netloc=='weibo.com' and u.path=='/ajax/statuses/update':
+            try:self.diagnostic['response']=response_shape(response.json())
+            except Exception as exc:self.diagnostic['response_shape_error']=type(exc).__name__
+        super().response(response)
+
+
+def input_shape(request):
+    """Persist bounded field names/types, never text, cookies or request values."""
+    pairs=parse_qs(request.post_data,keep_blank_values=True,strict_parsing=True,max_num_fields=30)
+    result=dict(fields={k:len(v) for k,v in pairs.items()})
+    if len(pairs.get('media',[]))==1:
+        media=submission.unique_json(pairs['media'][0])
+        if isinstance(media,dict):
+            result['media_fields']={k:type(v).__name__ for k,v in media.items()}
+            for key in ('titles','covers'):
+                if isinstance(media.get(key),list):
+                    result[key]=[{k:dict(type=type(v).__name__,value=v) if k in {'default','type','source','width','height'}
+                                  else type(v).__name__ for k,v in node.items()} if isinstance(node,dict) else type(node).__name__
+                                 for node in media[key][:4]]
+            for key in ('free_duration','resource','follower_watch_entire','homemade','contribution'):
+                if isinstance(media.get(key),dict):
+                    result[key]={k:dict(type=type(v).__name__,value=v) if type(v) in (int,bool) else type(v).__name__
+                                 for k,v in media[key].items()}
+    return result
+
+
+def response_shape(body):
+    result=dict(body_type=type(body).__name__)
+    if not isinstance(body,dict):return result
+    result['body_keys']=sorted(body);result['ok']=body.get('ok') if type(body.get('ok')) is int else type(body.get('ok')).__name__
+    data=body.get('data');result['data_type']=type(data).__name__
+    if isinstance(data,dict):
+        result['data_keys']=sorted(data)
+        result['identity_field_types']={k:type(data.get(k)).__name__ for k in ('id','idstr','mid','mblogid','user')}
+        if isinstance(data.get('user'),dict):result['user_keys']=sorted(data['user'])
+    return result
 
 
 def submit_once(page,pack,assets,uid,saved,marker):
@@ -50,6 +91,7 @@ def submit_once(page,pack,assets,uid,saved,marker):
     button=page.get_by_role('button',name='发布',exact=True)
     if button.count()!=1 or not button.is_visible() or button.is_disabled():
         raise PublishError('微博视频原生发布按钮不唯一、不可见或禁用')
+    button.scroll_into_view_if_needed(timeout=5000)
     shared.checkpoint(saved,marker,submission_attempted_at=time.time(),state='submission_unknown',
                       submission_snapshot=snapshot)
     capture=Capture(uid,pack,saved,marker,snapshot)
@@ -72,11 +114,95 @@ def submit_once(page,pack,assets,uid,saved,marker):
     finally:
         page.remove_listener('request',capture.request);page.remove_listener('response',capture.response)
         saved['native_response_count']=capture.count;saved['native_input_count']=capture.input_count
+        saved['native_submission_diagnostic']=capture.diagnostic
         if capture.error or capture.input_error:saved['receipt_error']=capture.error or capture.input_error
         write_json(marker,saved)
     if not saved.get('accepted'):
         raise PublishError('微博视频发送结果未知且没有可核对作品 ID；不重复发送')
     return saved['accepted']
+
+
+def before_native_send(saved):
+    if any(k in saved for k in ('native_input_checkpointed_at','accepted','native_input_receipt',
+                               'receipt_error','click_reply_unknown')):return False
+    if 'submission_attempted_at' not in saved:return True
+    return (saved.get('click_error_phase')=='before_native_input' and saved.get('click_error_type')=='PublishError'
+            and saved.get('native_input_count')==0 and saved.get('native_response_count')==0)
+
+
+def recovered_readback(pack,bound,saved,profile,candidate):
+    """Read the same candidate anew; prior recovery is never the proof itself."""
+    post.post.status_url(bound['identity'],candidate)
+    with home.connect(profile) as connection:
+        anchor=home.select_page(connection,'weibo',path='/',target_id=saved['anchor_target_id'])
+        home.assert_identity(anchor,bound['identity'])
+        observed=post.observe_existing(anchor,bound['identity'],candidate,bound['cdp_url'])
+    public=observed['public'];accepted=dict(remote_id=candidate,identity=bound['identity'],mblogid=public['mblogid'])
+    previous=saved.get('accepted')
+    if previous and any(previous.get(k)!=v for k,v in accepted.items()):
+        raise PublishError('微博恢复后的作品身份改变；不认领其他作品')
+    sources=post.bind_sources(pack,bound['identity'],accepted,saved,observed)
+    expected_statement={'内容由AI生成':1,'内容为虚构演绎':2,'内容为转载':3,'内容为自主创作':4,'无':0}.get(pack['platform_metadata']['declaration'])
+    if (expected_statement is None or public['statement']!=expected_statement or observed['edit']['playlists']!=[]):
+        raise PublishError('微博候选的内容声明或合集不符；保持未知')
+    result=dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},**sources,
+        state='published',remote_url=post.post.status_url(bound['identity'],candidate),
+        observed_account_identity=bound['identity'],tracking_scope='native_post_id',content_verified=True,
+        declaration_verified=True,recovery_verified=True,verified_asset_ids=[a['id'] for a in pack['assets']])
+    return accepted,observed,result
+
+
+def recover_candidate(request,pack,bound,marker,profile):
+    saved=read_json(marker);candidate=request.get('recovery_remote_id')
+    if (request.get('recovery_platform')!='weibo' or request['job']['state']!='submission_unknown'
+            or request['job'].get('remote_id') or any(saved.get(k)!=v for k,v in bound.items())
+            or not saved.get('native_input_checkpointed_at') or saved.get('native_input_count')!=1
+            or saved.get('native_response_count')!=1 or saved.get('accepted')):
+        raise PublishError('微博候选恢复缺少原任务与唯一发送记录；不认领')
+    accepted,observed,result=recovered_readback(pack,bound,saved,profile,candidate)
+    shared.checkpoint(saved,marker,accepted=dict(accepted,recovered_from_independent_detail=True),
+        state='accepted',original_receipt_error=saved.get('receipt_error'),receipt_error=None,
+        recovery_verified=True,recovery_observation=observed)
+    write_json(marker.with_suffix('.weibo-video-readback.json'),dict(observed=observed,result=result))
+    return result
+
+
+def recover_uploaded_unsent(action,request,pack,bound,marker,profile):
+    """Reuse a complete original editor only when no send was ever attempted."""
+    if not marker.exists():return None
+    saved=read_json(marker)
+    if saved.get('state') not in {'cover_uploaded','cover_verified','filled','unsent_video_verified','submission_unknown'}:
+        return None
+    if not before_native_send(saved):return None
+    if (not saved.get('native_video') or not saved.get('upload_events') or saved.get('upload_errors')!=[]
+            or not saved.get('anchor_target_id') or request['job'].get('remote_id')
+            or any(saved.get(k)!=v for k,v in bound.items())):
+        raise PublishError('微博已上传原稿绑定或完整上传证据缺失；不续写')
+    assets=prefill.assets_for_resume(pack,request['request_path'])
+    with home.connect(profile,writing=action=='execute') as connection:
+        anchor=home.select_page(connection,'weibo',path='/',target_id=saved['anchor_target_id'])
+        home.assert_identity(anchor,bound['identity'])
+        page=home.select_page(connection,'weibo',path='/upload/channel',target_id=saved['target_id'])
+        ready(page,pack,assets,bound['identity'],saved)
+        if action=='verify':
+            shared.checkpoint(saved,marker,state='unsent_video_verified')
+            return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                state='not_submitted',absence_verified=True,absence_scope='original_video_no_send_attempt',
+                evidence_path=str(marker),observed_account_identity=bound['identity'])
+        if action!='execute' or saved['state']!='unsent_video_verified' or request['job']['state']!='prepared':
+            raise PublishError('微博原稿须先独立核对未发送状态')
+        if 'submission_attempted_at' in saved:
+            keys=('submission_attempted_at','submission_snapshot','click_error_type','click_error_phase',
+                  'native_input_count','native_response_count')
+            saved.setdefault('pre_native_input_failures',[]).append({k:saved.pop(k) for k in keys if k in saved})
+            shared.checkpoint(saved,marker,state='unsent_video_verified')
+        accepted=submit_once(page,pack,assets,bound['identity'],saved,marker)
+        if not saved.get('receipt_error') and saved.get('native_input_receipt'):
+            page.close();shared.checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
+        return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+            state='pending',remote_id=accepted['remote_id'],
+            remote_url=post.post.status_url(bound['identity'],accepted['remote_id']),
+            observed_account_identity=bound['identity'],tracking_scope='native_post_id')
 
 
 def dispatch(request_path,action,profile,lock_fd):
@@ -92,6 +218,14 @@ def dispatch(request_path,action,profile,lock_fd):
     pack=build_pack(manifest,target['id'],profile,check_files=action=='execute');fields.check(pack,publishing=True)
     bound=dict(pack_digest=digest(pack),identity=uid,cdp_url=endpoint,browser_profile=browser)
     marker=home.marker_path(request_path)
+    if action=='verify' and request.get('recovery_remote_id') is not None:
+        return recover_candidate(request,pack,bound,marker,profile)
+    from browser_preinput import recover
+    recovered = recover(action, request, pack, bound, marker, profile)
+    if recovered is not None: return recovered
+    # The request file location is runtime context, never part of the sealed pack.
+    recovered = recover_uploaded_unsent(action,dict(request,request_path=str(request_path)),pack,bound,marker,profile)
+    if recovered is not None:return recovered
     if action=='execute' and marker.exists():raise PublishError('微博视频任务已有尝试；只查询，不重填或重传')
     if action=='verify':
         saved=read_json(marker)
@@ -103,6 +237,13 @@ def dispatch(request_path,action,profile,lock_fd):
         post.post.status_url(uid,accepted.get('remote_id'))
         if (accepted.get('identity')!=uid or request['job'].get('remote_id') not in (None,accepted['remote_id'])):
             raise PublishError('微博视频原作品或作者与核心账本矛盾')
+        if saved.get('recovery_verified') is True and accepted.get('recovered_from_independent_detail') is True:
+            if (not saved.get('native_input_checkpointed_at') or saved.get('native_input_count')!=1
+                    or saved.get('native_response_count')!=1):
+                raise PublishError('微博原候选恢复缺少唯一发送记录')
+            _,observed,result=recovered_readback(pack,bound,saved,profile,accepted['remote_id'])
+            write_json(marker.with_suffix('.weibo-video-readback.json'),dict(observed=observed,result=result))
+            return result
         receipt=saved.get('native_input_receipt');snapshot=saved.get('submission_snapshot')
         if (saved.get('receipt_error') or saved.get('native_input_count')!=1 or saved.get('native_response_count')!=1
                 or not saved.get('native_input_checkpointed_at') or not isinstance(receipt,dict)

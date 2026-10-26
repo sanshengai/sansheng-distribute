@@ -85,6 +85,7 @@ def submit_once(page, pack, identity, saved, marker, *, assets=None):
         if engine.editor(page).inner_text() != pack['fields']['composed_text']:
             raise PublishError('X 发送前文案已改变；保留原稿，不发送')
 
+    dismiss_topic_suggestions(page)
     ready()
     button = page.locator('[role="dialog"][aria-modal="true"] [data-testid="tweetButton"]')
     if button.count() != 1 or not button.is_visible() or button.is_disabled():
@@ -119,12 +120,103 @@ def submit_once(page, pack, identity, saved, marker, *, assets=None):
     finally:
         page.remove_listener('response', capture.response)
         saved['native_response_count'] = capture.count
+        saved['native_response_diagnostic'] = capture.diagnostic
         if capture.error:
             saved['receipt_error'] = capture.error
         write_json(marker, saved)
     if not saved.get('accepted'):
         raise PublishError('X 发送结果未知且无可核对作品 ID；保留首次尝试，不重复发送')
     return saved['accepted']
+
+
+def before_native_send(saved):
+    if any(k in saved for k in ('native_input_checkpointed_at','accepted','receipt_error')):
+        return False
+    if 'submission_attempted_at' not in saved:return True
+    return (saved.get('submission_protocol')==2 and saved.get('click_error_phase')=='before_native_input'
+            and saved.get('native_response_count')==0 and saved.get('click_error_type')=='PublishError')
+
+
+def dismiss_topic_suggestions(page):
+    popup=page.locator('[role="listbox"][id^="typeaheadDropdownWrapped-"]')
+    if popup.count()==1:
+        page.keyboard.press('Escape')
+        if popup.count():raise PublishError('X 话题建议仍遮挡发送按钮；不点击发送')
+
+
+def close_accepted_editor(page,saved,marker):
+    """Cleanup must not erase a durable accepted identity or mask its readback."""
+    try:
+        page.close()
+        checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
+    except Exception as exc:
+        checkpoint(saved,marker,owned_composer_cleanup_error=type(exc).__name__)
+
+
+def recover_uploaded_unsent(action, request, pack, bound, marker, profile):
+    """Continue the same uploaded video only after an independent unsent proof."""
+    if pack['content_type'] != 'video' or not marker.exists(): return None
+    saved = read_json(marker)
+    if saved.get('state') not in {'before_native_selection','cloud_processed','filled','unsent_video_verified','submission_unknown'}:
+        return None
+    if not before_native_send(saved):return None
+    if not saved.get('upload_events'): return None
+    if any(saved.get(k)!=v for k,v in bound.items()) or request['job'].get('remote_id'):
+        raise PublishError('X 已上传未发送任务的绑定已改变')
+    with engine.connect(profile,writing=action=='execute') as connection:
+        page=engine.select_page(connection,'x',path='/compose/post',target_id=saved['target_id'])
+        engine.assert_identity(page,bound['identity']);engine.assert_no_warning(page)
+        import x_video
+        native,cloud=x_video.verify(page,pack,saved)
+        node=engine.editor(page);text=node.inner_text()
+        blank=not text.strip(' \t\r\n\u200b\ufeff')
+        if not blank and text!=pack['fields']['composed_text']:
+            raise PublishError('X 原稿文案已被修改；保留原稿，不继续')
+        if action=='verify':
+            checkpoint(saved,marker,state='unsent_video_verified',native_video=native,cloud_video=cloud)
+            return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                state='not_submitted',absence_verified=True,absence_scope='original_video_no_native_send_attempt',
+                evidence_path=str(marker),observed_account_identity=bound['identity'])
+        if action!='execute' or saved['state']!='unsent_video_verified' or request['job']['state']!='prepared':
+            raise PublishError('X 已上传视频须先独立核对未发送状态')
+        if 'submission_attempted_at' in saved:
+            old={k:saved.pop(k) for k in ('submission_attempted_at','click_error_type','click_error_phase','click_error','native_response_count') if k in saved}
+            saved.setdefault('pre_native_input_failures',[]).append(old)
+            checkpoint(saved,marker,state='unsent_video_verified')
+        if blank:node.fill(pack['fields']['composed_text'])
+        dismiss_topic_suggestions(page)
+        saved['publication_media']=video_evidence(page,pack,saved)
+        checkpoint(saved,marker,state='filled')
+        accepted=submit_once(page,pack,bound['identity'],saved,marker)
+        close_accepted_editor(page,saved,marker)
+        return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+            state='pending',remote_id=accepted['remote_id'],
+            remote_url=x_post.status_url(bound['identity'],accepted['remote_id']),
+            observed_account_identity=bound['identity'],tracking_scope='native_post_id')
+
+
+def recover_candidate(request, pack, bound, marker, profile):
+    saved=read_json(marker);candidate=request.get('recovery_remote_id')
+    if (request.get('recovery_platform')!='x' or request['job']['state']!='submission_unknown'
+            or request['job'].get('remote_id') or any(saved.get(k)!=v for k,v in bound.items())
+            or saved.get('submission_protocol')!=2 or not saved.get('native_input_checkpointed_at')
+            or saved.get('native_response_count')!=1 or saved.get('accepted')):
+        raise PublishError('X 候选恢复缺少原任务、首次发送与原片身份；不认领')
+    x_post.status_url(bound['identity'],candidate)
+    x_post.check_publication_media(pack,saved.get('publication_media'))
+    with engine.connect(profile) as connection:
+        anchor=engine.select_page(connection,'x',target_id=saved['target_id'])
+        engine.assert_identity(anchor,bound['identity'],path='/home')
+        observed=x_post.readback(anchor,pack,bound['identity'],{'remote_id':candidate},
+                                expected_media=saved['publication_media'],cdp_url=bound['cdp_url'])
+        accepted=dict(remote_id=candidate,identity=bound['identity'],author_id=observed['author_id'],
+                      observed_at=time.time(),recovered_from_independent_detail=True)
+        checkpoint(saved,marker,accepted=accepted,state='accepted',
+                   original_receipt_error=saved.get('receipt_error'),receipt_error=None)
+        close_accepted_editor(anchor,saved,marker)
+    return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                **observed,state='published',remote_id=candidate,
+                observed_account_identity=bound['identity'],tracking_scope='native_post_id',recovery_verified=True)
 
 
 def dispatch(request_path, action, profile, lock_fd):
@@ -146,6 +238,13 @@ def dispatch(request_path, action, profile, lock_fd):
         raise PublishError('X 发送候选仅承接普通 text/images/video:publish')
     bound = dict(pack_digest=digest(pack), identity=identity, cdp_url=endpoint, browser_profile=browser)
     marker = engine.marker_path(request_path)
+    if action=='verify' and request.get('recovery_remote_id') is not None:
+        return recover_candidate(request,pack,bound,marker,profile)
+    from browser_preinput import recover
+    recovered = recover(action, request, pack, bound, marker, profile)
+    if recovered is not None: return recovered
+    recovered = recover_uploaded_unsent(action, request, pack, bound, marker, profile)
+    if recovered is not None: return recovered
     if action == 'execute' and marker.exists():
         raise PublishError('X 发送任务已有尝试；只读查询原作品，不重填或重新发送')
     if action == 'verify':
@@ -192,12 +291,13 @@ def dispatch(request_path, action, profile, lock_fd):
                 saved['state'] = 'filled'; write_json(marker, saved)
                 value = submit_once(page, pack, identity, saved, marker,
                                     assets=assets if pack['content_type'] == 'images' else None)
+                close_accepted_editor(page,saved,marker)
                 return dict({k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')},
                             state='pending', remote_id=value['remote_id'],
                             remote_url=x_post.status_url(identity, value['remote_id']),
                             observed_account_identity=identity, tracking_scope='native_post_id')
         observed = x_post.readback(anchor, pack, identity, saved['accepted'],
-                                   expected_media=saved.get('publication_media'))
+                                   expected_media=saved.get('publication_media'),cdp_url=endpoint)
         write_json(marker.with_suffix('.x-readback.json'), dict(observed, remote_id=saved['accepted']['remote_id']))
         return dict({k:pack[k] for k in ('manifest_digest', 'target_id', 'platform', 'account')},
                     **observed, state='published', remote_id=saved['accepted']['remote_id'],

@@ -120,12 +120,19 @@ def cloud_receipt(events, size, *, now=None):
             if type(event['status']) is not int or event['status']!={'INIT':202,'APPENDMULTI':204,'FINALIZE':200,'STATUS':200}[command]:
                 raise ValueError()
             if command=='APPENDMULTI':continue
-            body=event['body'];expiry=body['expires_after_secs']
-            if (body.get('media_id_string')!=ident or body.get('media_key')!=key or body.get('errors')
-                    or not number(expiry) or expiry<=0):raise ValueError()
-            deadlines.append(stamp+expiry)
+            body=event['body'];expiry=body.get('expires_after_secs')
+            if (body.get('media_id_string')!=ident or body.get('media_key')!=key or body.get('errors')):
+                raise ValueError()
+            # Processing STATUS responses omit size and expiry. INIT, FINALIZE,
+            # and the terminal succeeded STATUS must still bind them completely.
+            intermediate = command=='STATUS' and body.get('processing_info',{}).get('state') in {'pending','in_progress'}
+            if expiry is not None:
+                if not number(expiry) or expiry<=0:raise ValueError()
+                deadlines.append(stamp+expiry)
+            elif not intermediate:raise ValueError()
             if command in {'FINALIZE','STATUS'}:
-                if type(body.get('size')) is not int or body['size']!=size:raise ValueError()
+                if 'size' in body or not intermediate:
+                    if type(body.get('size')) is not int or body['size']!=size:raise ValueError()
                 if body.get('processing_info',{}).get('state') not in {'pending','in_progress','succeeded'}:raise ValueError()
         body=events[-1]['body']
         if (body.get('processing_info',{}).get('state')!='succeeded'
