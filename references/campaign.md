@@ -4,10 +4,19 @@
 
 ## 调用接口
 
+批量发布前先一次收齐本地阻塞，避免某个平台上传后才发现另一个平台的配置或素材有问题：
+
+```sh
+python3 scripts/publish.py --profile /private/profile.json batch-preflight /private/publish-manifest.json
+```
+
+`--target` 可重复指定子集。报告逐个列出 `local_ready` 和错误，包含就绪/阻塞数量；有阻塞时退出码为2，仍保留全部所选目标的报告。原稿摘要等共享输入不合法时整体拒绝。该命令复用实际单目标预检，不建账本或任务、不授权、不连接浏览器或平台；本地通过仍不证明登录、权限或发送可用。修复后继续原任务，不新建空账本。已有未知或待审核任务应走恢复，不能用预检通过替代原任务查询。
+
 Python 模块 `scripts/campaign.py` 复用 `publish_core.Store`，供 CLI 和当前 Agent 调用：
 
 ```python
 prepare_campaign(manifest_path, store, target_ids=None)
+preflight_campaign(manifest_path, profile, target_ids=None)
 authorize_campaign(campaign_id, store, statement, target_ids=None)
 run_campaign(campaign_id, profile, store, target_ids=None, resume=False, max_parallel=1)
 campaign_status(campaign_id, store)

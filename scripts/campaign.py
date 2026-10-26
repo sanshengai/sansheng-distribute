@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-from publish_core import HEX, PublishError, Store, digest, read_json, run, target_of, validate, write_json
+from publish_core import HEX, PublishError, Store, digest, preflight, read_json, run, target_of, validate, write_json
 
 FINISHED = {"draft_ready", "prefill_ready", "published", "broadcasted"}
 
@@ -29,6 +29,38 @@ def _path(store, campaign_id):
     if not isinstance(campaign_id, str) or not HEX.fullmatch(campaign_id):
         raise PublishError("非法批量任务 ID")
     return store.directory / "campaigns" / f"{campaign_id}.json"
+
+
+def preflight_campaign(manifest_path, profile, target_ids=None):
+    """Collect local blockers before any job, grant, browser or upload is created.
+
+    Reuse the single-target execution preflight, including its capability and
+    field checks. A pass is neither authorization nor a remote login check.
+    Invalid shared input is rejected before individual platform checks.
+    """
+    manifest = read_json(manifest_path)
+    common = validate(manifest)
+    selected = _select([t["id"] for t in manifest["targets"]], target_ids)
+    rows = []
+    for ident in selected:
+        target = target_of(manifest, ident)
+        row = {"target_id": ident, "platform": target["platform"],
+               "account": target["account"], "endpoint": target["endpoint"]}
+        try:
+            preflight(manifest, ident, profile)
+            row.update(local_ready=True)
+        except Exception as exc:
+            # Do not dump arbitrary dependency errors, which may contain secrets.
+            message = str(exc) if isinstance(exc, PublishError) else f"本地检查失败：{type(exc).__name__}"
+            row.update(local_ready=False, error=message)
+        rows.append(row)
+    return {"manifest_digest": common["manifest_digest"],
+            "selected_targets": selected, "targets": rows,
+            "ready_count": sum(r["local_ready"] for r in rows),
+            "blocked_count": sum(not r["local_ready"] for r in rows),
+            "all_local_checks_passed": all(r["local_ready"] for r in rows),
+            "local_only": True, "authorization_checked": False,
+            "remote_checked": False}
 
 
 def _load(store, campaign_id):

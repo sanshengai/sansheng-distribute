@@ -33,6 +33,8 @@ def main():
     p = sub.add_parser("pack", help="生成平台发布包；不截断文案、不执行远端操作")
     p.add_argument("manifest"); p.add_argument("--target", required=True); p.add_argument("--output", required=True)
     p = sub.add_parser("batch-prepare"); p.add_argument("manifest"); p.add_argument("--target", action="append")
+    p = sub.add_parser("batch-preflight", help="一次汇总所选目标的本地阻塞；不建任务、不授权、不连接平台")
+    p.add_argument("manifest"); p.add_argument("--target", action="append")
     for name in ("batch-authorize", "batch-run", "batch-resume", "batch-status"):
         p = sub.add_parser(name); p.add_argument("campaign_id")
         if name != "batch-status": p.add_argument("--target", action="append")
@@ -51,6 +53,9 @@ def main():
             result = validate(read_json(args.manifest))
         elif args.action == 'preflight':
             result = preflight(read_json(args.manifest), args.target, load_profile(args.profile))
+        elif args.action == 'batch-preflight':
+            from campaign import preflight_campaign
+            result = preflight_campaign(args.manifest, load_profile(args.profile), args.target)
         elif args.action == "pack":
             from platform_pack import build_pack
             profile = load_profile(args.profile) if Path(args.profile).is_file() else {}
@@ -87,8 +92,9 @@ def main():
                 result = store.authorize(read_json(args.manifest), args.target, args.statement)
             else:
                 result = store.prepare(read_json(args.manifest), args.target)
-        print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, indent=2))
-        return 0
+        ok = args.action != 'batch-preflight' or result['all_local_checks_passed']
+        print(json.dumps({"ok": ok, "result": result}, ensure_ascii=False, indent=2))
+        return 0 if ok else 2
     except (PublishError, EnvironmentError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 2

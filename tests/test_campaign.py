@@ -1,12 +1,13 @@
 import copy
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from campaign import authorize_campaign, campaign_status, prepare_campaign, run_campaign
+from campaign import authorize_campaign, campaign_status, prepare_campaign, preflight_campaign, run_campaign
 from publish_core import PublishError, Store, digest, validate, write_json
 
 
@@ -62,6 +63,54 @@ print(json.dumps(o))
 
     def states(self, report):
         return {x["target_id"]: x["state"] for x in report["targets"]}
+
+    def test_local_preflight_reports_all_targets_without_running_or_granting(self):
+        self.profile['adapters']['x']['enabled_capabilities'] = []
+        before = self.store.status()
+        report = preflight_campaign(self.path, self.profile)
+        self.assertEqual([r['local_ready'] for r in report['targets']], [False, True])
+        self.assertEqual((report['ready_count'], report['blocked_count']), (1, 1))
+        self.assertFalse(report['all_local_checks_passed'])
+        self.assertFalse(report['authorization_checked'])
+        self.assertFalse(report['remote_checked'])
+        self.assertIn('尚未启用', report['targets'][0]['error'])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.store.status(), before)
+        for table in ['grants', 'events', 'timings', 'account_locks']:
+            self.assertEqual(self.store.db.execute('SELECT count(*) FROM '+table).fetchone()[0], 0)
+
+    def test_local_preflight_selection_and_changed_source_fail_closed(self):
+        self.profile['adapters']['x']['enabled_capabilities'] = []
+        report = preflight_campaign(self.path, self.profile, ['weibo'])
+        self.assertTrue(report['all_local_checks_passed'])
+        self.assertEqual(report['selected_targets'], ['weibo'])
+        for selected in ([], ['missing'], ['x', 'x']):
+            with self.assertRaises(PublishError):
+                preflight_campaign(self.path, self.profile, selected)
+        (self.root / 'source.txt').write_text('被修改的原稿', encoding='utf-8')
+        with self.assertRaises(PublishError):
+            preflight_campaign(self.path, self.profile)
+        self.assertEqual(self.calls(), [])
+
+    def test_local_preflight_cli_exit_status_and_no_state_directory(self):
+        cli = Path(__file__).resolve().parents[1] / 'scripts' / 'publish.py'
+        config = self.root / 'profile.json'
+        state = self.root / 'not-created'
+        self.profile['adapters']['x']['enabled_capabilities'] = []
+        write_json(config, self.profile)
+        command = [sys.executable, str(cli), '--profile', str(config), '--state-dir', str(state),
+                   'batch-preflight', str(self.path)]
+        first = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(first.returncode, 2, first.stdout + first.stderr)
+        result = json.loads(first.stdout)
+        self.assertFalse(result['ok'])
+        self.assertEqual(len(result['result']['targets']), 2)
+        self.assertFalse(state.exists())
+        second = subprocess.run(command+['--target', 'weibo'], text=True, capture_output=True)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertTrue(json.loads(second.stdout)['ok'])
+        self.assertFalse(state.exists())
+        self.assertEqual(self.calls(), [])
 
     def test_partial_failure_continues_and_unknown_never_resends(self):
         self.authorize()
