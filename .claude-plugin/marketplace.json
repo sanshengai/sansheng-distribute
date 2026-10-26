@@ -9,7 +9,7 @@
     {
       "name": "sansheng-distribute",
       "description": "Experimental publishing handoffs, verified results and resumable delivery for agents.",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "source": "./",
       "author": {
         "name": "叁笙 (sansheng)",
