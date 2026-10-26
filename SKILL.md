@@ -2,7 +2,7 @@
 name: sansheng-distribute
 description: 将已有文章、图文和视频交接到指定社交平台，处理公众号媒体插入、草稿、发布、核验与续跑。用于发布与分发任务；文章创作、排版及视频制作仍由各自内容 Skill 负责。
 metadata:
-  version: "0.7.0"
+  version: "0.7.1"
 ---
 
 # 叁笙分发
