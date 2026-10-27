@@ -15,6 +15,8 @@ metadata:
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
+分发后用批量任务手册中的 `batch-report` 生成私有本地 HTML 看板，并在对话中按平台简述状态；明确区分账本快照、草稿、待作者操作和已核验公开。没有批次记录或缺少平台独立读回时照实报告，不创建假记录凑看板。
+
 多目标首次执行前，用 `batch-preflight <manifest>` 一次收齐所选平台的本地阻塞，再准备和执行；已有任务沿原账本查询恢复。它不联网、不建任务或授权，本地通过不代表登录或发布通过。API路线先用已验证的适配器；没有可用接口的平台复用已有浏览器流程，不因提效任务默认扩大到新发送引擎。
 
 显式选用包内浏览器引擎时读 [内置引擎](references/browser-engines.md)：X 与微博的文字、多图、视频，以及抖音视频已做真实预填与只读续跑；X/微博视频核对原片字节和原生云端回执，微博另验封面、类型/声明，抖音另验横竖封面、原生话题、声明和指定合集。预填终点不发送，临时编辑会话每次复用重新核对。

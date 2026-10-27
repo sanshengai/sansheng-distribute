@@ -36,6 +36,8 @@ def main():
     p = sub.add_parser("batch-prepare"); p.add_argument("manifest"); p.add_argument("--target", action="append")
     p = sub.add_parser("batch-preflight", help="一次汇总所选目标的本地阻塞；不建任务、不授权、不连接平台")
     p.add_argument("manifest"); p.add_argument("--target", action="append")
+    p = sub.add_parser("batch-report", help="将已有批次的账本快照生成本地 HTML；不联网、不覆盖已有文件")
+    p.add_argument("campaign_id", nargs="+"); p.add_argument("--output", required=True)
     for name in ("batch-authorize", "batch-run", "batch-resume", "batch-status"):
         p = sub.add_parser(name); p.add_argument("campaign_id")
         if name != "batch-status": p.add_argument("--target", action="append")
@@ -72,6 +74,9 @@ def main():
                     result = authorize_campaign(args.campaign_id, store, args.statement, args.target)
                 elif args.action == "batch-status":
                     result = campaign_status(args.campaign_id, store)
+                elif args.action == "batch-report":
+                    from campaign_report import write_report
+                    result = write_report(args.campaign_id, store, args.output)
                 else:
                     result = run_campaign(args.campaign_id, load_profile(args.profile), store, args.target,
                                           resume=args.action == "batch-resume", max_parallel=args.max_parallel)
