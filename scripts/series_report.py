@@ -9,7 +9,7 @@ from __future__ import annotations
 import html
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,10 @@ STATES = {
     'blocked': ('需核对', 'warn'), 'draft_ready': ('草稿', 'wait'),
     'prefill_ready': ('待作者', 'wait'),
 }
+
+# These are display-only observations supplied by a person; they do not update
+# the ledger or authorize a retry. Restrict the vocabulary to understood states.
+EXTERNAL_STATES = {'published', 'pending', 'submission_unknown', 'failed', 'draft_ready', 'prefill_ready'}
 
 
 def esc(value):
@@ -84,7 +88,8 @@ def _validate_marker(target, series_code, episode):
 def render_series_report(spec, store):
     if not isinstance(spec, dict):
         raise PublishError('系列看板映射必须为对象')
-    if set(spec) != {'title', 'series_job_prefix', 'series_code', 'episodes', 'platforms', 'targets'}:
+    required = {'title', 'series_job_prefix', 'series_code', 'episodes', 'platforms', 'targets'}
+    if not required <= set(spec) or set(spec) - (required | {'external_observations'}):
         raise PublishError('系列看板映射字段不完整或包含未知字段')
     title = _string(spec['title'], '标题')
     prefix = _string(spec['series_job_prefix'], '系列任务前缀')
@@ -146,38 +151,56 @@ def render_series_report(spec, store):
             used_keys.add(key)
         cells[cell] = row
 
+    observations = spec.get('external_observations', [])
+    if not isinstance(observations, list):
+        raise PublishError('人工核验记录必须为列表')
+    for item in observations:
+        if not isinstance(item, dict) or set(item) != {'platform', 'account', 'episode', 'state', 'evidence', 'observed_at'}:
+            raise PublishError('人工核验记录字段不完整或包含未知字段')
+        platform = _string(item['platform'], '人工核验平台')
+        account = _string(item['account'], '人工核验账号')
+        pair = (platform, account)
+        episode = item['episode']
+        if pair not in platform_rows or type(episode) is not int or episode not in episodes:
+            raise PublishError('人工核验的平台账号或集数不在预期列表中')
+        state = item['state']
+        if not isinstance(state, str) or state not in EXTERNAL_STATES:
+            raise PublishError('人工核验状态不在允许列表中')
+        evidence = _string(item['evidence'], '人工核验证据')
+        if len(evidence) > 240:
+            raise PublishError('人工核验证据不能超过 240 字')
+        observed_at = _string(item['observed_at'], '人工核验日期')
+        try:
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', observed_at):
+                raise ValueError()
+            date.fromisoformat(observed_at)
+        except ValueError as exc:
+            raise PublishError('人工核验日期须为 YYYY-MM-DD') from exc
+        cell = (pair, episode)
+        if cell in cells:
+            raise PublishError('人工核验与已有账本或其他人工记录冲突，不能覆盖')
+        cells[cell] = {'state': state, 'external': True, 'evidence': evidence, 'observed_at': observed_at}
+
     header = ''.join(f'<th scope="col">第 {n} 集</th>' for n in episodes)
     table_rows = []
     for pair in platform_rows:
         count = 0
-        # Only adjacent episodes with identical underlying status merge.
-        # Missing mappings never merge with prepared ledger targets.
-        groups = []
+        row_cells = []
         for ep in episodes:
             row = cells.get((pair, ep))
             if row is None:
                 label, tone = '无记录', 'empty'
-                identity = ('missing',)
             elif row.get('error'):
                 label, tone = '需核对', 'warn'
-                identity = ('error', row.get('state'), str(row['error']))
             else:
                 label, tone = STATES.get(row.get('state'), ('状态未知', 'warn'))
-                identity = ('state', row.get('state'))
                 if row.get('state') in {'published', 'broadcasted'}:
                     count += 1
-            if groups and groups[-1]['identity'] == identity and ep == groups[-1]['end'] + 1:
-                groups[-1]['end'] = ep
-                groups[-1]['span'] += 1
-            else:
-                groups.append({'identity': identity, 'start': ep, 'end': ep, 'span': 1,
-                               'label': label, 'tone': tone})
-        row_cells = []
-        for group in groups:
-            start, end, span = group['start'], group['end'], group['span']
-            episode_range = f'第 {start} 集' if start == end else f'第 {start}–{end} 集'
-            row_cells.append(f'<td colspan="{span}" aria-label="{esc(episode_range)}：{esc(group["label"])}">'
-                             f'<span class="status {group["tone"]}">{esc(group["label"])}</span></td>')
+            external = row is not None and row.get('external', False)
+            source = f'人工核验 {row["observed_at"]}：{row["evidence"]}' if external else '本地账本' if row is not None else '无记录'
+            source_marker = '<span class="source">人工</span>' if external else ''
+            row_cells.append(f'<td aria-label="第 {ep} 集：{esc(label)}，{esc(source)}" title="{esc(source)}">'
+                             f'<span class="status {tone}">{esc(label)}</span>{source_marker}</td>')
         platform, account = pair
         note = f'<small>人工备注：{esc(notes[pair])}</small>' if notes[pair] else ''
         reason, action = explanations[pair]
@@ -196,14 +219,15 @@ def render_series_report(spec, store):
 main{{max-width:1180px;margin:auto;padding:30px 22px}}header{{margin-bottom:16px}}.eyebrow{{color:var(--muted);font-size:13px;margin:0 0 6px}}
 h1{{font-size:clamp(25px,3vw,36px);margin:0 0 9px}}.note{{font-size:13px;line-height:1.5;color:var(--muted);margin:0}}
 .table-wrap{{background:white;border:1px solid var(--line);border-radius:9px;overflow-x:auto}}
-table{{border-collapse:collapse;width:100%;font-size:13px;min-width:900px}}th,td{{padding:8px 6px;border-bottom:1px solid #e8f0ed;text-align:center;white-space:nowrap}}thead th{{font-weight:600;color:var(--muted);background:#f8fbfa}}
+table{{border-collapse:collapse;width:100%;font-size:12px;min-width:900px}}th,td{{padding:7px 4px;border-bottom:1px solid #e8f0ed;text-align:center;white-space:nowrap}}thead th{{font-weight:600;color:var(--muted);background:#f8fbfa}}
 tbody tr:last-child th,tbody tr:last-child td{{border-bottom:0}}tbody th{{text-align:left;padding-left:15px}}small{{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:3px;white-space:normal;max-width:180px;line-height:1.3;overflow-wrap:anywhere}}
-.status{{display:inline-block;border-radius:4px;padding:4px 6px;color:#425c60;background:#edf2f1}}.ok{{color:#176044;background:#dcefe5}}.warn{{color:#765108;background:#fff1d4}}.bad{{color:#a5362c;background:#fbe9e5}}.empty{{color:#708381;background:#f2f5f4}}.total{{font-weight:600;font-size:12px}}
+.status{{display:inline-block;border-radius:4px;padding:3px 4px;font-size:11px;color:#425c60;background:#edf2f1}}.ok{{color:#176044;background:#dcefe5}}.warn{{color:#765108;background:#fff1d4}}.bad{{color:#a5362c;background:#fbe9e5}}.empty{{color:#708381;background:#f2f5f4}}.total{{font-weight:600;font-size:12px}}
+.source{{display:block;font-size:10px;color:var(--muted);line-height:1.1}}
 .details{{text-align:left;white-space:normal;min-width:210px;max-width:280px;color:var(--muted);font-size:12px;line-height:1.4;overflow-wrap:anywhere}}.details b{{font-weight:600;color:var(--ink)}}.muted{{color:var(--muted)}}
 @media(max-width:680px){{main{{padding:20px 12px}}.table-wrap{{border-radius:6px}}}}
 </style></head><body><main><header><p class="eyebrow">分发进度 · 本地账本快照</p><h1>{esc(title)}</h1>
-<p class="note">生成于 {esc(stamp)}；未实时查询平台。无记录不代表未发布；账本待执行也不能证明平台没有其他作品。</p></header>
-<div class="table-wrap" role="region" aria-label="系列分发进度" tabindex="0"><table><thead><tr><th scope="col">平台 / 账号</th>{header}<th scope="col">账本已发布</th><th scope="col">原因与建议</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></div>
+<p class="note">生成于 {esc(stamp)}；未实时查询平台。无记录不代表未发布；账本待执行也不能证明平台没有其他作品。标注“人工”的状态来自人工核验，并计入已记录发布数。</p></header>
+<div class="table-wrap" role="region" aria-label="系列分发进度" tabindex="0"><table><thead><tr><th scope="col">平台 / 账号</th>{header}<th scope="col">已记录发布</th><th scope="col">原因与建议</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></div>
 </main></body></html>'''
 
 

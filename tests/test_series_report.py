@@ -70,7 +70,7 @@ class SeriesReportTests(unittest.TestCase):
         self.assertEqual(result.count('<tr>'), 4)  # header plus three accounts
         for value in ['第 1 集', '第 2 集', '第 3 集', '已发布', '账本待执行', '结果不明', '无记录']:
             self.assertIn(value, result)
-        self.assertIn('账本已发布', result)
+        self.assertIn('已记录发布', result)
         self.assertIn('1 / 3', result)
         self.assertIn('尚无对应账本', result)
         self.assertIn('人工备注：待确认登录', result)
@@ -180,32 +180,85 @@ class SeriesReportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(json.loads(result.stdout)['result']['remote_checked'])
         self.assertIn('结果不明', out.read_text())
-        self.assertIn('colspan="2" aria-label="第 2–3 集：无记录"', out.read_text())
+        self.assertIn('aria-label="第 2 集：无记录，', out.read_text())
+        self.assertIn('aria-label="第 3 集：无记录，', out.read_text())
         self.assertEqual(self.store.status(), before)
         self.assertEqual(self.calls(), [])
 
-    def test_adjacent_same_state_merges_and_mixed_state_does_not(self):
+    def test_each_episode_has_its_own_cell_even_when_states_match(self):
         self.make_campaign()
         self.spec['platforms'][0].update(reason='旧账本待查', action='先核对平台')
         rendered = render_series_report(self.spec, self.store)
         # X has published / uncertain / missing: one cell per episode.
-        self.assertIn('colspan="1" aria-label="第 1 集：已发布"', rendered)
-        self.assertIn('colspan="1" aria-label="第 2 集：结果不明"', rendered)
+        self.assertIn('aria-label="第 1 集：已发布，', rendered)
+        self.assertIn('aria-label="第 2 集：结果不明，', rendered)
         # Weibo has a prepared target followed by two unmapped episodes.
-        self.assertIn('colspan="1" aria-label="第 1 集：账本待执行"', rendered)
-        self.assertIn('colspan="2" aria-label="第 2–3 集：无记录"', rendered)
-        # YouTube has no targets in any episode.
-        self.assertIn('colspan="3" aria-label="第 1–3 集：无记录"', rendered)
+        self.assertIn('aria-label="第 1 集：账本待执行，', rendered)
+        for ep in (1, 2, 3):
+            self.assertIn(f'aria-label="第 {ep} 集：无记录，', rendered)
+        self.assertNotIn('colspan=', rendered)
         self.assertIn('<b>原因：</b>旧账本待查', rendered)
         self.assertIn('<b>建议：</b>先核对平台', rendered)
-        # Every episode mapped to a published ledger job may merge.
+        # Even when every episode is published, every one has its own cell.
         key = self.make_single_job()
         self.spec['targets'].append({'job_key': key, 'episode': 3})
         with self.store.db:
             self.store.db.execute("UPDATE jobs SET state='published' WHERE key=?",
                                   (self.store.key(self.manifest, self.manifest['targets'][2]),))
         rendered = render_series_report(self.spec, self.store)
-        self.assertIn('colspan="3" aria-label="第 1–3 集：已发布"', rendered)
+        for ep in (1, 2, 3):
+            self.assertIn(f'aria-label="第 {ep} 集：已发布，', rendered)
+        self.assertNotIn('colspan=', rendered)
+
+    def test_external_observations_are_separate_and_do_not_mutate_ledger(self):
+        self.make_campaign()
+        self.spec['platforms'][2]['account'] = 'yt-account'
+        self.spec['external_observations'] = [
+            {'platform': 'youtube', 'account': 'yt-account', 'episode': 1,
+             'state': 'published', 'evidence': '<img src=x onerror=alert(1)>', 'observed_at': '2026-10-28'},
+            {'platform': 'youtube', 'account': 'yt-account', 'episode': 2,
+             'state': 'published', 'evidence': '作品管理页人工核对', 'observed_at': '2026-10-28'},
+        ]
+        before = self.store.status()
+        spec_path = self.root / 'external-series.json'
+        write_json(spec_path, self.spec)
+        out = self.root / 'external-report.html'
+        cli = Path(__file__).resolve().parents[1] / 'scripts' / 'publish.py'
+        result = subprocess.run([sys.executable, str(cli), '--state-dir', str(self.store.directory),
+                                 'series-report', str(spec_path), '--output', str(out)],
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rendered = out.read_text()
+        self.assertIn('第 1 集：已发布，人工核验 2026-10-28', rendered)
+        self.assertIn('第 2 集：已发布，人工核验 2026-10-28', rendered)
+        self.assertIn('第 3 集：无记录，无记录', rendered)
+        self.assertEqual(rendered.count('<span class="source">人工</span>'), 2)
+        self.assertIn('并计入已记录发布数', rendered)
+        self.assertIn('2 / 3', rendered)
+        self.assertIn('&lt;img', rendered)
+        parser = _HTMLAudit()
+        parser.feed(rendered)
+        self.assertNotIn('img', parser.tags)
+        self.assertEqual(self.store.status(), before)
+        self.assertEqual(self.calls(), [])
+
+    def test_external_invalid_or_conflicting_records_fail_closed(self):
+        self.make_campaign()
+        valid = {'platform': 'x', 'account': 'social', 'episode': 3, 'state': 'published',
+                 'evidence': '作品管理页', 'observed_at': '2026-10-28'}
+        cases = []
+        for changes in ({'episode': 1}, {'state': 'made_up'}, {'state': None},
+                        {'account': ''}, {'platform': 'wrong'}, {'episode': True},
+                        {'evidence': ''}, {'observed_at': '2026-02-30'},
+                        {'observed_at': '2026-10-28T12:00:00'}, {'extra': 'field'}):
+            item = {**valid, **changes}
+            cases.append([item])
+        cases.append([valid, copy.deepcopy(valid)])
+        for observations in cases:
+            spec = copy.deepcopy(self.spec)
+            spec['external_observations'] = observations
+            with self.subTest(observations=observations), self.assertRaises(PublishError):
+                render_series_report(spec, self.store)
 
     def test_rejects_invalid_reason_or_action(self):
         self.make_campaign()
