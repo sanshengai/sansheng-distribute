@@ -12,6 +12,8 @@ python3 scripts/publish.py --profile /private/profile.json batch-preflight /priv
 
 `--target` 可重复指定子集。报告逐个列出 `local_ready` 和错误，包含就绪/阻塞数量；有阻塞时退出码为2，仍保留全部所选目标的报告。原稿摘要等共享输入不合法时整体拒绝。该命令复用实际单目标预检，不建账本或任务、不授权、不连接浏览器或平台；本地通过仍不证明登录、权限或发送可用。修复后继续原任务，不新建空账本。已有未知或待审核任务应走恢复，不能用预检通过替代原任务查询。
 
+对已配置规则明确识别出的文案长度、素材数量或格式及必填项问题，结果额外给出 `issue`（问题字段、分类和处理建议；数量有明确依据时包含当前值与上限）。无法确定原因时不猜测。规则来自用户自己的配置，不把配置限制说成平台统一标准。
+
 Python 模块 `scripts/campaign.py` 复用 `publish_core.Store`，供 CLI 和当前 Agent 调用：
 
 ```python
@@ -38,7 +40,27 @@ campaign_status(campaign_id, store)
 
 ### 本地结果看板
 
-分发或续跑后，给作者生成一份可在浏览器直接打开的 HTML；多个已有批次可汇总：
+系列节目优先制作一页式进度表：先在私有目录准备明确映射，指定系列、预期平台账号、集数及每一集对应的已封存批次目标或独立任务；不改原 manifest 或账本。无对应任务的平台账号可留空，不推断账号。示例字段：
+
+```json
+{
+  "title": "示例系列 · 第二季", "series_job_prefix": "example-s2-", "series_code": "S2",
+  "episodes": [1, 2],
+  "platforms": [{"platform": "x", "account": "creator"}, {"platform": "youtube", "account": ""}],
+  "targets": [{"campaign_id": "<批次 ID>", "target_id": "S2E01-x", "episode": 1},
+              {"job_key": "<单任务 ID>", "episode": 2}]
+}
+```
+
+映射必须由真实交接及账本证据构造；同一个平台和账号的一集不得映射多个任务。程序校验任务身份、快照摘要、系列前缀与标题或目标 ID 的集数标记，不能单凭标题证明内容身份；有歧义就停止并由 Agent 复核。平台行可带简短 `note`，页面明确显示为人工备注。生成：
+
+```sh
+python3 scripts/publish.py --state-dir /private/state series-report /private/series-map.json --output /private/series-result.html
+```
+
+输出以平台账号为行、集数为列，区分已发布、待核验、账本待执行、草稿、结果不明和无记录；进度只统计账本的已发布状态。未记录不能断言未发布，过时计划也不能推翻其他渠道的历史发布证据；先进行有身份依据的只读核验，才能刷新状态。地图与看板包含私有账号信息，只保存在本地。手机上可横向查看表格。
+
+非系列或需要详细字段时，可用以下命令生成 HTML；多个已有批次可汇总：
 
 ```sh
 python3 scripts/publish.py --state-dir /private/state batch-report <campaign-id> [<campaign-id> ...] --output /private/result.html

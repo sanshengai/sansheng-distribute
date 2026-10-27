@@ -53,6 +53,11 @@ def preflight_campaign(manifest_path, profile, target_ids=None):
             # Do not dump arbitrary dependency errors, which may contain secrets.
             message = str(exc) if isinstance(exc, PublishError) else f"本地检查失败：{type(exc).__name__}"
             row.update(local_ready=False, error=message)
+            if isinstance(exc, PublishError):
+                from preflight_advice import explain_known_blocker
+                issue = explain_known_blocker(message, target, manifest, profile)
+                if issue:
+                    row['issue'] = issue
         rows.append(row)
     return {"manifest_digest": common["manifest_digest"],
             "selected_targets": selected, "targets": rows,

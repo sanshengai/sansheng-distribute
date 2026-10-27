@@ -38,6 +38,8 @@ def main():
     p.add_argument("manifest"); p.add_argument("--target", action="append")
     p = sub.add_parser("batch-report", help="将已有批次的账本快照生成本地 HTML；不联网、不覆盖已有文件")
     p.add_argument("campaign_id", nargs="+"); p.add_argument("--output", required=True)
+    p = sub.add_parser("series-report", help="按平台和集数汇总账本快照；不联网、不覆盖已有文件")
+    p.add_argument("spec"); p.add_argument("--output", required=True)
     for name in ("batch-authorize", "batch-run", "batch-resume", "batch-status"):
         p = sub.add_parser(name); p.add_argument("campaign_id")
         if name != "batch-status": p.add_argument("--target", action="append")
@@ -80,6 +82,9 @@ def main():
                 else:
                     result = run_campaign(args.campaign_id, load_profile(args.profile), store, args.target,
                                           resume=args.action == "batch-resume", max_parallel=args.max_parallel)
+            elif args.action == "series-report":
+                from series_report import write_series_report
+                result = write_series_report(args.spec, store, args.output)
             elif args.action == "status":
                 result = store.status(args.key)
             elif args.action == 'metrics':

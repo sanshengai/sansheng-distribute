@@ -15,7 +15,7 @@ metadata:
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
-分发后用批量任务手册中的 `batch-report` 生成私有本地 HTML 看板，并在对话中按平台简述状态；明确区分账本快照、草稿、待作者操作和已核验公开。没有批次记录或缺少平台独立读回时照实报告，不创建假记录凑看板。
+分发后在对话中按平台简述状态；系列多集优先按[批量分发](references/campaign.md)中的 `series-report` 生成精简看板，每个平台账号一行、每集一格。普通任务可用 `batch-report` 查看详细信息。明确区分账本快照、草稿、待作者操作和已核验公开；无记录不等于未发布，不创建假记录凑看板。
 
 多目标首次执行前，用 `batch-preflight <manifest>` 一次收齐所选平台的本地阻塞，再准备和执行；已有任务沿原账本查询恢复。它不联网、不建任务或授权，本地通过不代表登录或发布通过。API路线先用已验证的适配器；没有可用接口的平台复用已有浏览器流程，不因提效任务默认扩大到新发送引擎。
 
