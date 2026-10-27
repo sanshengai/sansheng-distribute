@@ -1,7 +1,7 @@
 {
   "name": "sansheng-distribute",
   "description": "Experimental agent publishing handoffs, per-platform progress, verified drafts and resumable delivery.",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "author": {
     "name": "叁笙 (sansheng)",
     "email": "sandypoli@gmail.com"
