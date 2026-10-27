@@ -143,13 +143,19 @@ class SeriesReportTests(unittest.TestCase):
         self.make_campaign()
         self.spec['title'] = '<script>alert(1)</script>'
         self.spec['platforms'][2]['note'] = '<img src=x onerror=alert(2)>'
+        self.spec['platforms'][2]['reason'] = '<svg onload=alert(3)>'
+        self.spec['platforms'][2]['action'] = '<iframe src=x>'
         rendered = render_series_report(self.spec, self.store)
         parser = _HTMLAudit()
         parser.feed(rendered)
         self.assertNotIn('script', parser.tags)
         self.assertNotIn('img', parser.tags)
+        self.assertNotIn('svg', parser.tags)
+        self.assertNotIn('iframe', parser.tags)
         self.assertIn('&lt;script&gt;', rendered)
         self.assertIn('&lt;img', rendered)
+        self.assertIn('&lt;svg', rendered)
+        self.assertIn('&lt;iframe', rendered)
         spec_path = self.root / 'private-series.json'
         write_json(spec_path, self.spec)
         out = self.root / 'series.html'
@@ -174,8 +180,40 @@ class SeriesReportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(json.loads(result.stdout)['result']['remote_checked'])
         self.assertIn('结果不明', out.read_text())
+        self.assertIn('colspan="2" aria-label="第 2–3 集：无记录"', out.read_text())
         self.assertEqual(self.store.status(), before)
         self.assertEqual(self.calls(), [])
+
+    def test_adjacent_same_state_merges_and_mixed_state_does_not(self):
+        self.make_campaign()
+        self.spec['platforms'][0].update(reason='旧账本待查', action='先核对平台')
+        rendered = render_series_report(self.spec, self.store)
+        # X has published / uncertain / missing: one cell per episode.
+        self.assertIn('colspan="1" aria-label="第 1 集：已发布"', rendered)
+        self.assertIn('colspan="1" aria-label="第 2 集：结果不明"', rendered)
+        # Weibo has a prepared target followed by two unmapped episodes.
+        self.assertIn('colspan="1" aria-label="第 1 集：账本待执行"', rendered)
+        self.assertIn('colspan="2" aria-label="第 2–3 集：无记录"', rendered)
+        # YouTube has no targets in any episode.
+        self.assertIn('colspan="3" aria-label="第 1–3 集：无记录"', rendered)
+        self.assertIn('<b>原因：</b>旧账本待查', rendered)
+        self.assertIn('<b>建议：</b>先核对平台', rendered)
+        # Every episode mapped to a published ledger job may merge.
+        key = self.make_single_job()
+        self.spec['targets'].append({'job_key': key, 'episode': 3})
+        with self.store.db:
+            self.store.db.execute("UPDATE jobs SET state='published' WHERE key=?",
+                                  (self.store.key(self.manifest, self.manifest['targets'][2]),))
+        rendered = render_series_report(self.spec, self.store)
+        self.assertIn('colspan="3" aria-label="第 1–3 集：已发布"', rendered)
+
+    def test_rejects_invalid_reason_or_action(self):
+        self.make_campaign()
+        for field, value in [('reason', None), ('action', 'x' * 161)]:
+            spec = copy.deepcopy(self.spec)
+            spec['platforms'][0][field] = value
+            with self.subTest(field=field), self.assertRaises(PublishError):
+                render_series_report(spec, self.store)
 
 
 if __name__ == '__main__':

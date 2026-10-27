@@ -101,8 +101,9 @@ def render_series_report(spec, store):
         raise PublishError('预期平台账号必须为非空列表')
     platform_rows = []
     notes = {}
+    explanations = {}
     for item in platforms:
-        if not isinstance(item, dict) or not {'platform', 'account'} <= set(item) or set(item) - {'platform', 'account', 'note'}:
+        if not isinstance(item, dict) or not {'platform', 'account'} <= set(item) or set(item) - {'platform', 'account', 'note', 'reason', 'action'}:
             raise PublishError('平台账号字段不正确')
         if not isinstance(item['account'], str):
             raise PublishError('账号必须为字符串')
@@ -113,6 +114,10 @@ def render_series_report(spec, store):
         if not isinstance(note, str) or len(note) > 100:
             raise PublishError('人工备注必须是最多 100 字的字符串')
         notes[pair] = note
+        reason, action = item.get('reason', ''), item.get('action', '')
+        if any(not isinstance(value, str) or len(value) > 160 for value in (reason, action)):
+            raise PublishError('原因与建议必须是最多 160 字的字符串')
+        explanations[pair] = (reason, action)
         platform_rows.append(pair)
     entries = spec['targets']
     if not isinstance(entries, list):
@@ -145,23 +150,44 @@ def render_series_report(spec, store):
     table_rows = []
     for pair in platform_rows:
         count = 0
-        row_cells = []
+        # Only adjacent episodes with identical underlying status merge.
+        # Missing mappings never merge with prepared ledger targets.
+        groups = []
         for ep in episodes:
             row = cells.get((pair, ep))
             if row is None:
                 label, tone = '无记录', 'empty'
+                identity = ('missing',)
             elif row.get('error'):
                 label, tone = '需核对', 'warn'
+                identity = ('error', row.get('state'), str(row['error']))
             else:
                 label, tone = STATES.get(row.get('state'), ('状态未知', 'warn'))
+                identity = ('state', row.get('state'))
                 if row.get('state') in {'published', 'broadcasted'}:
                     count += 1
-            row_cells.append(f'<td><span class="status {tone}">{esc(label)}</span></td>')
+            if groups and groups[-1]['identity'] == identity and ep == groups[-1]['end'] + 1:
+                groups[-1]['end'] = ep
+                groups[-1]['span'] += 1
+            else:
+                groups.append({'identity': identity, 'start': ep, 'end': ep, 'span': 1,
+                               'label': label, 'tone': tone})
+        row_cells = []
+        for group in groups:
+            start, end, span = group['start'], group['end'], group['span']
+            episode_range = f'第 {start} 集' if start == end else f'第 {start}–{end} 集'
+            row_cells.append(f'<td colspan="{span}" aria-label="{esc(episode_range)}：{esc(group["label"])}">'
+                             f'<span class="status {group["tone"]}">{esc(group["label"])}</span></td>')
         platform, account = pair
         note = f'<small>人工备注：{esc(notes[pair])}</small>' if notes[pair] else ''
+        reason, action = explanations[pair]
+        details = ''.join(f'<div><b>{label}：</b>{esc(value)}</div>'
+                          for label, value in (('原因', reason), ('建议', action)) if value)
+        details = details or '<span class="muted">暂无说明</span>'
         table_rows.append(f'<tr><th scope="row"><strong>{esc(PLATFORMS.get(platform, platform))}</strong>'
                           f'<small>{esc(account or "尚无对应账本")}</small>{note}</th>{"".join(row_cells)}'
-                          f'<td class="total">{count} / {len(episodes)}</td></tr>')
+                          f'<td class="total">{count} / {len(episodes)}</td>'
+                          f'<td class="details">{details}</td></tr>')
     stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M %z')
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} · 发布进度</title><style>
@@ -170,13 +196,14 @@ def render_series_report(spec, store):
 main{{max-width:1180px;margin:auto;padding:30px 22px}}header{{margin-bottom:16px}}.eyebrow{{color:var(--muted);font-size:13px;margin:0 0 6px}}
 h1{{font-size:clamp(25px,3vw,36px);margin:0 0 9px}}.note{{font-size:13px;line-height:1.5;color:var(--muted);margin:0}}
 .table-wrap{{background:white;border:1px solid var(--line);border-radius:9px;overflow-x:auto}}
-table{{border-collapse:collapse;width:100%;font-size:13px;min-width:730px}}th,td{{padding:8px 6px;border-bottom:1px solid #e8f0ed;text-align:center;white-space:nowrap}}thead th{{font-weight:600;color:var(--muted);background:#f8fbfa}}
+table{{border-collapse:collapse;width:100%;font-size:13px;min-width:900px}}th,td{{padding:8px 6px;border-bottom:1px solid #e8f0ed;text-align:center;white-space:nowrap}}thead th{{font-weight:600;color:var(--muted);background:#f8fbfa}}
 tbody tr:last-child th,tbody tr:last-child td{{border-bottom:0}}tbody th{{text-align:left;padding-left:15px}}small{{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:3px;white-space:normal;max-width:180px;line-height:1.3;overflow-wrap:anywhere}}
 .status{{display:inline-block;border-radius:4px;padding:4px 6px;color:#425c60;background:#edf2f1}}.ok{{color:#176044;background:#dcefe5}}.warn{{color:#765108;background:#fff1d4}}.bad{{color:#a5362c;background:#fbe9e5}}.empty{{color:#708381;background:#f2f5f4}}.total{{font-weight:600;font-size:12px}}
-@media(max-width:680px){{main{{padding:20px 12px}}.table-wrap{{border-radius:6px}}table{{min-width:730px}}}}
+.details{{text-align:left;white-space:normal;min-width:210px;max-width:280px;color:var(--muted);font-size:12px;line-height:1.4;overflow-wrap:anywhere}}.details b{{font-weight:600;color:var(--ink)}}.muted{{color:var(--muted)}}
+@media(max-width:680px){{main{{padding:20px 12px}}.table-wrap{{border-radius:6px}}}}
 </style></head><body><main><header><p class="eyebrow">分发进度 · 本地账本快照</p><h1>{esc(title)}</h1>
 <p class="note">生成于 {esc(stamp)}；未实时查询平台。无记录不代表未发布；账本待执行也不能证明平台没有其他作品。</p></header>
-<div class="table-wrap" role="region" aria-label="系列分发进度" tabindex="0"><table><thead><tr><th scope="col">平台 / 账号</th>{header}<th scope="col">账本已发布</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></div>
+<div class="table-wrap" role="region" aria-label="系列分发进度" tabindex="0"><table><thead><tr><th scope="col">平台 / 账号</th>{header}<th scope="col">账本已发布</th><th scope="col">原因与建议</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></div>
 </main></body></html>'''
 
 
