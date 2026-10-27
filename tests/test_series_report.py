@@ -260,6 +260,37 @@ class SeriesReportTests(unittest.TestCase):
             with self.subTest(observations=observations), self.assertRaises(PublishError):
                 render_series_report(spec, self.store)
 
+    def test_external_review_and_recommendation_states_are_not_conflated(self):
+        self.make_campaign()
+        self.spec['platforms'].append({'platform': 'alipay', 'account': 'creator'})
+        self.spec['external_observations'] = [
+            {'platform': 'alipay', 'account': 'creator', 'episode': ep, 'state': state,
+             'evidence': '后台逐集核对', 'observed_at': '2026-10-28'}
+            for ep, state in enumerate(('published_limited', 'reviewing', 'rejected'), 1)
+        ]
+        before = self.store.status()
+        rendered = render_series_report(self.spec, self.store)
+        self.assertIn('第 1 集：已发布·限推，人工核验', rendered)
+        self.assertIn('第 2 集：审核中，人工核验', rendered)
+        self.assertIn('第 3 集：审核未通过，人工核验', rendered)
+        self.assertIn('1 / 3', rendered)
+        self.assertEqual(self.store.status(), before)
+        self.assertEqual(self.calls(), [])
+
+    def test_explicit_not_submitted_needs_evidence_and_does_not_count_as_published(self):
+        self.make_campaign()
+        self.spec['platforms'][2]['account'] = 'yt-account'
+        item = {'platform': 'youtube', 'account': 'yt-account', 'episode': 1,
+                'state': 'not_submitted', 'evidence': '本人确认还没上传', 'observed_at': '2026-10-28'}
+        self.spec['external_observations'] = [item]
+        rendered = render_series_report(self.spec, self.store)
+        self.assertIn('第 1 集：未提交，人工核验', rendered)
+        self.assertIn('第 2 集：无记录，无记录', rendered)
+        self.assertIn('0 / 3', rendered)
+        item['evidence'] = ''
+        with self.assertRaises(PublishError):
+            render_series_report(self.spec, self.store)
+
     def test_rejects_invalid_reason_or_action(self):
         self.make_campaign()
         for field, value in [('reason', None), ('action', 'x' * 161)]:

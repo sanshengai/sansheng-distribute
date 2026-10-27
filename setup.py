@@ -106,6 +106,8 @@ def main(argv=None):
                         'wechat_channels': '微信视频号；需要登录的专用浏览器与 Agent 浏览器工具',
                         'bilibili': 'B 站视频；需要登录的创作中心与 Agent 浏览器工具',
                         'tencent_video': '腾讯视频；需要登录的创作后台与 Agent 浏览器工具',
+                        'youtube': 'YouTube 视频交接；使用 Agent 浏览器，自动投稿尚未验收',
+                        'alipay': '支付宝生活号视频交接；使用 Agent 浏览器，自动投稿尚未验收',
                     }
                     for platform in PLATFORMS:
                         if platform not in platforms and input(f'{descriptions[platform]}，配置吗？[y/N] ').strip().lower() in ('y', 'yes', '是'):

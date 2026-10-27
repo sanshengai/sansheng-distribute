@@ -33,6 +33,8 @@ def main():
             p.add_argument("--statement", required=True, help="已有用户授权的实际原话，不得编造")
     p = sub.add_parser("pack", help="生成平台发布包；不截断文案、不执行远端操作")
     p.add_argument("manifest"); p.add_argument("--target", required=True); p.add_argument("--output", required=True)
+    p = sub.add_parser("platform-guide", help="只读查看平台交接类型、本地规则和配置；不连接平台")
+    p.add_argument("platform")
     p = sub.add_parser("batch-prepare"); p.add_argument("manifest"); p.add_argument("--target", action="append")
     p = sub.add_parser("batch-preflight", help="一次汇总所选目标的本地阻塞；不建任务、不授权、不连接平台")
     p.add_argument("manifest"); p.add_argument("--target", action="append")
@@ -49,7 +51,13 @@ def main():
     store = None
     try:
         if args.action not in {"seal", "check"}:
-            paths = resolve_paths(args.profile, args.state_dir)
+            # This read-only query never opens a ledger; don't require choosing
+            # between legacy and new state directories merely to view guidance.
+            state_hint = (args.state_dir or ".") if args.action == "platform-guide" else args.state_dir
+            paths = resolve_paths(args.profile, state_hint)
+            if (args.action == "platform-guide" and paths['profile_source'] != 'default'
+                    and not paths['profile_exists']):
+                raise EnvironmentError('明确指定的配置文件不存在或不是普通文件')
             args.profile, args.state_dir = paths["profile"], paths["state_dir"]
         if args.action == "seal":
             value = seal(args.spec, args.output)
@@ -66,6 +74,10 @@ def main():
             profile = load_profile(args.profile) if Path(args.profile).is_file() else {}
             result = build_pack(read_json(args.manifest), args.target, profile)
             write_json(args.output, result)
+        elif args.action == "platform-guide":
+            from platform_guide import platform_guide
+            profile = load_profile(args.profile) if Path(args.profile).is_file() else {}
+            result = platform_guide(args.platform, profile)
         else:
             store = Store(args.state_dir)
             if args.action.startswith("batch-"):

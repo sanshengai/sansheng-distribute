@@ -30,6 +30,8 @@ PLATFORMS = {
     "tencent_video": {"video"},
     "wechat_channels": {"video"},
     "bilibili": {"video"},
+    "youtube": {"video"},
+    "alipay": {"video"},
     "xiaohongshu": {"images", "video"},
 }
 ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$")
@@ -204,6 +206,21 @@ def validate(manifest, *, sealing=False):
             raise PublishError("broadcast 只适用于公众号，不能与发表混用")
         if platform == "xiaohongshu" and row["endpoint"] not in {"prefill", "draft"}:
             raise PublishError("小红书最终点击须由作者完成")
+        if platform in {"youtube", "alipay"}:
+            metadata = row.get("platform_metadata", {})
+            if not isinstance(metadata, dict):
+                raise PublishError("platform_metadata 必须为对象")
+            if platform == "youtube":
+                if type(metadata.get("made_for_kids")) is not bool:
+                    raise PublishError("YouTube 需要明确的 made_for_kids 布尔值；不能推断受众")
+                if metadata.get("visibility") not in ("public", "unlisted", "private"):
+                    raise PublishError("YouTube 需要明确 visibility：public、unlisted 或 private")
+            for field in ("ai_generated", "altered_content"):
+                if field in metadata and type(metadata[field]) is not bool:
+                    raise PublishError(f"{field} 必须为布尔值；不能猜测声明")
+            for field in ("collection_name", "playlist_name"):
+                if field in metadata and (not isinstance(metadata[field], str) or not metadata[field].strip()):
+                    raise PublishError(f"{field} 必须为非空名称")
         if row.get("document_id") and row["document_id"] not in documents:
             raise PublishError("目标引用了不存在的文稿")
         ids = row.get("asset_ids", [])

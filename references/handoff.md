@@ -19,7 +19,11 @@ Write 在 HTML 中明确放置可见标记 `【发布媒体:slot-id】`，再 `s
 
 生产端输出缺少 sha256/context 的 spec，运行 `seal spec.json --output publish-manifest.json`。整个最终 manifest 计算指纹，改文案、账号、终点或文件版本均使旧授权不适用。
 
-平台：wechat/x/weibo/douyin/tencent_video/bilibili/xiaohongshu。终点：draft/prefill/publish/broadcast；broadcast 仅公众号，小红书只允许 draft/prefill。
+平台：wechat/x/weibo/douyin/tencent_video/wechat_channels/bilibili/xiaohongshu/youtube/alipay。终点：draft/prefill/publish/broadcast；broadcast 仅公众号，小红书只允许 draft/prefill。YouTube 和支付宝生活号目前只支持视频本地交接包与 Agent 工作单，**不是已验收的自动投稿器或平台只读查询**；用户仍需配置并验收具体执行路线，不能凭本地检查宣称发布成功。
+
+YouTube 视频的 `platform_metadata` 必须显式提供 `made_for_kids`（布尔值）和 `visibility`（`public`、`unlisted` 或 `private`）；不从影片主题、年龄或其他平台默认推断受众，也不默认公开。可提供 `playlist_name`（非空字符串）和 `altered_content`（布尔值，表示对平台要求的合成内容声明，不等同于所有 AI 使用）。支付宝可提供 `collection_name`（非空字符串）与 `ai_generated`（布尔值）；省略表示未知或未交接，不等于 false，也不自动勾选声明。两平台都可带 `ai_generated`、`altered_content`，实际页面如何映射必须按作品事实和平台当前要求核对。
+
+指定封面应通过 `cover_asset_id` 引用已登记的目标图片；指定合集、播放列表、声明及其他平台字段随原样工作单保留，不能静默丢弃、替换或在找不到时继续冒称完成。平台是否要求、支持何种声明或裁切，以当时界面和作品事实核对；本地校验并不能保证视频格式、权限、额度、账号或审核通过。
 
 ## CLI
 

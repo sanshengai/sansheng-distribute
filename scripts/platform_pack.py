@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from environment import load_profile
 from publish_core import PublishError, digest, read_json, resolve_file, target_of, validate, write_json
 
-SOCIAL = {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels', 'xiaohongshu'}
+SOCIAL = {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels', 'xiaohongshu', 'youtube', 'alipay'}
 CHECKS = {
  'wechat_channels': ['进入微信视频号助手并核对视频号ID；不使用公众号或腾讯视频身份', '核对短标题、描述、话题、竖横封面、AI声明与合集；从内容管理独立确认实际作品ID和状态'],
  'x': ['区分普通帖与长文章；核实账号当前文字及视频权限', '重新打开真实状态页或可恢复编辑稿，核对文字、链接、媒体与播放'],
@@ -17,6 +17,8 @@ CHECKS = {
  'bilibili': ['核对分区、自制或转载来源、封面、标签及字幕', '保存稿件身份，审核通过后独立打开永久页核对播放'],
  'tencent_video': ['进入腾讯视频创作平台，核对入驻身份、分类与权限；不是视频号', '创作管理与实际 v.qq.com 内容页交叉核对'],
  'xiaohongshu': ['受限账号不进入浏览器；核对图序、封面和话题；最终按钮由作者操作', '仅报告可恢复的草稿或预填，不将当前页面当作永久身份'],
+ 'youtube': ['核对频道、上传资格、作者指定封面和播放列表；按作品明确设置受众与可见性，不默认公开或非儿童', '按平台字段核对合成内容声明；上传后独立核验同一视频 ID、受众、可见性及播放列表'],
+ 'alipay': ['核对生活号身份；按作品选择作者声明，指定封面与合集须核对并保留，不静默替换', '从内容管理核对同一作品身份；分别记录发布、审核和推荐状态，不能以受理代替已发布'],
 }
 
 
@@ -102,6 +104,9 @@ def build_pack(manifest, target_id, profile=None, *, check_files=True):
     if fields['text'] and fields['description'] and fields['text']!=fields['description']:
         pack['warnings'].append('text 与 description 不同：各自保留，执行时按平台字段映射，禁止丢弃描述')
     if subtitles: pack['checks'].append('全部字幕必须独立确认上传或明确退回生产端；不得声称无字幕的成片已包含字幕')
+    if platform in {'youtube','alipay'}:
+        pack['warnings'].append('仅提供本地交接与 Agent 工作单；未提供已验收的自动上传或平台状态读取')
+        pack['checks'].append('逐项核对全部 platform_metadata，未映射字段不得静默丢弃；指定封面、合集或声明无法落实时停下')
     return pack
 
 

@@ -16,6 +16,7 @@
 
 - **接收定稿**：生产端提供文字、图片、视频及文章内音视频的插入位置。
 - **检查发布包**：核对素材、目标平台、账号、终点与版本；不代替作者重新创作。
+- **查询本地交接规则**：用 `platform-guide` 查看平台可接收的类型、工作单和已配置规格；不代表实时规则或登录状态。
 - **一次查齐本地阻塞**：批量上传前汇总各目标的配置、能力、素材和执行器问题；有一项失败仍检查其他目标，不连接平台。
 - **组织多平台任务**：每个平台保留自己的状态，一个目标出错不阻止其他目标；完成的目标不重复执行。
 - **独立读回**：上传完成、等待审核、草稿就绪和公开发布分别记录。
@@ -75,6 +76,8 @@ python3 examples/offline_demo.py
 | 小红书 | 图文或视频预填 | 真实账号尚未验收；最后点击由作者完成，受限账号只准备本地包 |
 | 微信视频号 | 独立视频号目标、Agent 浏览器执行及独立读回 | 真实账号验收范围见能力表；与公众号、腾讯视频分开 |
 | 腾讯视频 | 独立视频平台流程 | 真实账号尚未验收；不把微信视频号当作腾讯视频 |
+| YouTube | 本地视频交接包与 Agent 工作单 | 要求明确受众和可见性，保留封面等字段；自动上传和平台状态读取尚未验收 |
+| 支付宝生活号 | 本地视频交接包与 Agent 工作单 | 保留合集、封面及声明；自动上传和平台状态读取尚未验收 |
 
 平台页面会变化，账号权限也会不同。[能力与证据](references/platforms.md)是当前范围说明。初始化不会自动开放未验收能力，也不会替用户授权。
 
@@ -212,6 +215,7 @@ I'm **sansheng**, a creator building content and tools with AI. These skills gro
 - [宝玉 / baoyu-skills](https://github.com/JimLiu/baoyu-skills)：借鉴公众号、X 与微博的发布流程；审阅版本采用 MIT。未捆绑上游执行代码。
 - [dreammis / social-auto-upload](https://github.com/dreammis/social-auto-upload)：多平台视频上传的调研来源；审阅仓库采用 MIT，总 Skill 标注 MIT-0。本项目不捆绑或默认安装该工具，也不把其微信视频号适配当作腾讯视频支持。
 - [sansheng-write](https://github.com/sanshengai/sansheng-write)（MIT）：内置公众号 API 与白名单出口模块的来源，保留 MIT 许可与文件来源锁；文章创作和排版仍由生产端负责。
+- [Postiz](https://github.com/gitroomhq/postiz-app)（AGPL-3.0）与 [Mixpost](https://github.com/inovector/mixpost)（MIT）：借鉴平台规则查询及账号任务隔离的设计；未移植其源码。
 - [sfdenibao / social-publish-mcp](https://github.com/sfdenibao/social-publish-mcp) 与 [rehatRobot / omnipost](https://github.com/rehatRobot/omnipost)（MIT）：提交前记账、调度与平台字段的源码对照来源；不捆绑其服务、队列或上传器。
 - [xpzouying / xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)（Apache-2.0）：登录、上传、话题与提交边界的审查来源；不捆绑或调用其最终发布路径，也不据此承诺免风控。
 

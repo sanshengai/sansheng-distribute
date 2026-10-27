@@ -60,6 +60,8 @@ python3 scripts/publish.py --state-dir /private/state series-report /private/ser
 
 输出以平台账号为行、集数为列，每集单独显示状态，区分已发布、待核验、账本待执行、草稿、结果不明和无记录；进度统计账本及有证据的人工记录中已发布的集数。账本之外已有可靠核验时，可在私有映射的 `external_observations` 中逐条写 `platform`、`account`、`episode`、`state`、`evidence` 和 `observed_at`（YYYY-MM-DD）；对应平台账号必须先列入 `platforms`。页面标为人工记录，不写入账本，重复或与账本对应集冲突时拒绝。原因、建议及人工记录以填写的证据为准，生成看板不会联网核验。未记录不能断言未发布，过时计划也不能推翻其他渠道的历史发布证据；先进行有身份依据的只读核验，才能刷新状态。地图与看板包含私有账号信息，只保存在本地。手机上可横向查看表格。
 
+人工观察可用 `published_limited`（已发布但平台限制推荐，计入已发布）、`reviewing`（审核中）、`rejected`（审核未通过）和 `not_submitted`（有证据确认未提交）。它们只呈现观察，不改变任务账本或许可重发；平台原因不明时不要自行推断。仅因没有记录不能填写 `not_submitted`。
+
 非系列或需要详细字段时，可用以下命令生成 HTML；多个已有批次可汇总：
 
 ```sh

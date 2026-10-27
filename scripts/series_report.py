@@ -24,11 +24,15 @@ STATES = {
     'submission_unknown': ('结果不明', 'warn'), 'failed': ('需处理', 'bad'),
     'blocked': ('需核对', 'warn'), 'draft_ready': ('草稿', 'wait'),
     'prefill_ready': ('待作者', 'wait'),
+    'published_limited': ('已发布·限推', 'warn'),
+    'reviewing': ('审核中', 'wait'), 'rejected': ('审核未通过', 'bad'),
+    'not_submitted': ('未提交', 'wait'),
 }
 
 # These are display-only observations supplied by a person; they do not update
 # the ledger or authorize a retry. Restrict the vocabulary to understood states.
-EXTERNAL_STATES = {'published', 'pending', 'submission_unknown', 'failed', 'draft_ready', 'prefill_ready'}
+EXTERNAL_STATES = {'published', 'pending', 'submission_unknown', 'failed', 'draft_ready', 'prefill_ready',
+                   'published_limited', 'reviewing', 'rejected', 'not_submitted'}
 
 
 def esc(value):
@@ -194,7 +198,7 @@ def render_series_report(spec, store):
                 label, tone = '需核对', 'warn'
             else:
                 label, tone = STATES.get(row.get('state'), ('状态未知', 'warn'))
-                if row.get('state') in {'published', 'broadcasted'}:
+                if row.get('state') in {'published', 'broadcasted', 'published_limited'}:
                     count += 1
             external = row is not None and row.get('external', False)
             source = f'人工核验 {row["observed_at"]}：{row["evidence"]}' if external else '本地账本' if row is not None else '无记录'

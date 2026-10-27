@@ -10,7 +10,7 @@ import shutil
 import sys
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
-PLATFORMS = ('wechat', 'x', 'weibo', 'xiaohongshu', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels')
+PLATFORMS = ('wechat', 'x', 'weibo', 'xiaohongshu', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels', 'youtube', 'alipay')
 
 
 class EnvironmentError(ValueError):
