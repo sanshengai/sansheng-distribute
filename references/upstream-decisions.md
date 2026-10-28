@@ -30,7 +30,7 @@
 ### Postiz 与 Mixpost（2026-10-28 只读对照）
 
 - [Postiz 平台验证工具](https://github.com/gitroomhq/postiz-app/blob/a5affe62c74e39c1e7ac960d50d8418b807d532c/libraries/nestjs-libraries/src/chat/tools/integration.validation.tool.ts)展示发布前查询平台规则和字段；本包增加本地规则查询，输出严格区分本地配置与平台实时能力，不接入其服务。
-- [Postiz YouTube 上传器](https://github.com/gitroomhq/postiz-app/blob/a5affe62c74e39c1e7ac960d50d8418b807d532c/libraries/nestjs-libraries/src/integrations/social/youtube.provider.ts)提供可恢复上传和视频与封面分项结果的设计线索。本包默认关闭的官方 API 上传已完成单账号真实视频验收；封面和合集另有临时脚本的真实操作证据，不能替代包内整链验收。使用前须核 [上传](https://developers.google.com/youtube/data/reference/rest/v3/videos/insert)与[断点续传协议](https://developers.google.com/youtube/data/guides/using_resumable_upload_protocol)、账户权限、配额及完整失败恢复。Postiz 仓库为 AGPL-3.0，本次仅参考设计，不复制源码。
+- [Postiz YouTube 上传器](https://github.com/gitroomhq/postiz-app/blob/a5affe62c74e39c1e7ac960d50d8418b807d532c/libraries/nestjs-libraries/src/integrations/social/youtube.provider.ts)提供可恢复上传和视频与封面分项结果的设计线索。本包默认关闭的官方 API 上传已有单账号真实视频验收；包内已实测既有视频封面重设及已有合集读回，新视频组合整链仍未真实验收。使用前须核 [上传](https://developers.google.com/youtube/data/reference/rest/v3/videos/insert)与[断点续传协议](https://developers.google.com/youtube/data/guides/using_resumable_upload_protocol)、账户权限、配额及完整失败恢复。Postiz 仓库为 AGPL-3.0，本次仅参考设计，不复制源码。
 - [Mixpost 按账号发布](https://github.com/inovector/mixpost/blob/df57648b866310446703f5294350552b62735df5/src/Actions/AccountPublishPost.php)和[平台/账号限额](https://github.com/inovector/mixpost/blob/df57648b866310446703f5294350552b62735df5/src/Concerns/Job/HasSocialProviderJobRateLimit.php)提供失败隔离与限额范围的设计参考。本包已有逐目标结果、账号锁和用户显式配置的本地平台/账号间隔；没有自动读取平台限额，不根据假设设置规避风控的时间间隔。本次未复制 MIT 源码，未安装或实测上述两项目。
 
 以下结论对应 `sources.json` 中固定提交及逐文件摘要。仅研究控制流程，没有安装其 Skill、MCP 服务或执行其上传器；不能据此开启本包的平台发送能力。

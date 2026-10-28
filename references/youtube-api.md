@@ -1,6 +1,6 @@
 # YouTube 官方 API：受控候选
 
-这是**默认关闭、按账号与字段逐项验收**的候选。它调用官方 YouTube Data API 的可恢复上传协议，不沿用网页登录 Cookie。单账号已完成六集公开视频上传与独立读回；私密/不公开终点、字幕、额外素材和未映射字段不能静默忽略。封面、合集另有临时脚本操作证据，不能直接等同于本包整链实测。
+这是**默认关闭、按账号与字段逐项验收**的候选。它调用官方 YouTube Data API 的可恢复上传协议，不沿用网页登录 Cookie。单账号已完成六集公开视频上传与独立读回；包内组件在一条已有视频上重设同一封面、读回并目视核对，同时核验已有合集成员。新合集插入与新视频组合投稿整链尚未真实验收。私密/不公开终点、字幕、额外素材和未映射字段不能静默忽略。
 
 ## 本地准备与授权
 
@@ -99,6 +99,6 @@ python3 scripts/publish.py --profile /path/to/private/profile.json --state-dir /
 
 ## 验证边界
 
-完成返回视频 ID 后先保存原任务，再独立读回频道、标题、简介、标签、受众、隐私、已提供的合成声明、处理状态与匿名 oEmbed；内容不一致、处理未完成或匿名读回不足时不报告已发布。YouTube 不提供本路径上的远端原片 SHA-256；**本地快照哈希与同一上传会话绑定，不等于平台对远端原片做了哈希验证**。单账号 OAuth 刷新与六集视频上传已有真实证据；错误恢复、其他账号、字幕、配额耗尽及平台审核差异不能据此认定已通过。封面、合集的临时脚本实测和本包整链验收分开记录。
+完成返回视频 ID 后先保存原任务，再独立读回频道、标题、简介、标签、受众、隐私、已提供的合成声明、处理状态与匿名 oEmbed；内容不一致、处理未完成或匿名读回不足时不报告已发布。YouTube 不提供本路径上的远端原片 SHA-256；**本地快照哈希与同一上传会话绑定，不等于平台对远端原片做了哈希验证**。单账号 OAuth 刷新、六集视频上传及单条既有视频的封面组件已有真实证据；错误恢复、其他账号、字幕、配额耗尽、新合集插入及新视频组合整链不能据此认定已通过。
 
 依据：[YouTube 可恢复上传协议](https://developers.google.com/youtube/data/guides/using_resumable_upload_protocol)、[videos.insert](https://developers.google.com/youtube/data/reference/rest/v3/videos/insert)、[videos.list](https://developers.google.com/youtube/data/reference/rest/v3/videos/list)。
