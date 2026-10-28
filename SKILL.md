@@ -1,6 +1,6 @@
 ---
 name: sansheng-distribute
-description: 将已有文章、图文和视频交接到指定社交平台，处理公众号媒体插入、草稿、发布、核验与续跑；也可按需处理 YouTube 评论。文章创作、排版及视频制作仍由各自内容 Skill 负责。
+description: 将已有文章、图文和视频分发到社交平台，处理发布、核验与续跑；按需检查评论、整理互动和回复。文章创作、排版及视频制作仍由各自内容 Skill 负责。
 metadata:
   version: "0.14.2"
 ---
@@ -15,7 +15,7 @@ metadata:
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
-查看或回复 YouTube 评论时按需读 [YouTube 评论候选](references/youtube-comments.md)。候选使用官方 API 并需单独授权；目前仅单账号自评论及自回复完成真实读回，其他平台和他人评论回复不能据此视为已验收。
+需要发现评论、汇总待处理互动或回复时，先读 [互动流程](references/interaction.md) 和 [平台能力与限制](references/interaction-platforms.md)，再按需读 [YouTube 评论候选](references/youtube-comments.md)。YouTube 使用官方 API 并需单独授权；目前仅单账号查询、自评论及自回复完成真实读回，其他平台和他人评论回复不能据此视为已验收。收件箱只读同步不会自动发送，平台不支持或权限未获批时不得虚报可用。
 
 分发后在对话中按平台简述状态；系列多集优先按[批量分发](references/campaign.md)中的 `series-report` 生成精简看板，每个平台账号一行、每集一个状态格，并说明有证据的原因和建议。普通任务可用 `batch-report` 查看详细信息。明确区分账本快照、草稿、待作者操作和已核验公开；无记录不等于未发布，不创建假记录凑看板。
 
@@ -27,7 +27,7 @@ metadata:
 
 显式选用包内浏览器引擎时读 [内置引擎](references/browser-engines.md)：X 与微博的文字、多图、视频，以及抖音视频已做真实预填与只读续跑；X/微博视频核对原片字节和原生云端回执，微博另验封面、类型/声明，抖音另验横竖封面、原生话题、声明和指定合集。预填终点不发送，临时编辑会话每次复用重新核对。
 
-X 单 MP4 已完成真实系列发送与独立读回，微博单视频已完成真实发送及缺失作品 ID 的候选恢复；这些单账号实测不自动开放其他账号。文字、多图和抖音发送仍分别按验收证据判断；各自支持范围和未覆盖字段见内置引擎。首次试验按 [验收方法](references/acceptance.md) 绑定具体内容，不以已有作品读回代替本次发送验收。
+X 官方规则禁止非 API 网站脚本：历史浏览器实测只证明技术表现，不代表平台许可；默认提供本地发布包供作者手动发布，或使用有资格且已授权的官方 API。X 单 MP4 曾完成真实系列发送与独立读回，微博单视频已完成真实发送及缺失作品 ID 的候选恢复；这些单账号实测不自动开放其他账号。文字、多图和抖音发送仍分别按验收证据判断；各自支持范围和未覆盖字段见内置引擎。首次试验按 [验收方法](references/acceptance.md) 绑定具体内容，不以已有作品读回代替本次发送验收。
 
 先解析当前 `SKILL.md` 所在真实目录作为 Skill 根；下列 `scripts/...` 路径相对该目录，不相对用户工程。核心需 macOS/Linux、Python 3.10+ 及执行本机命令的工具（使用 POSIX 文件锁）；不能据此宣称支持 Windows。核心仅用标准库，平台另有依赖：公众号使用本包内置官方 API（旧配置的显式 Write 模块仍兼容），补媒体还需当前 Agent 的浏览器能力。
 

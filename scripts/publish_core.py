@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -38,6 +39,7 @@ PLATFORMS = {
 ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$")
 HEX = re.compile(r"^[a-f0-9]{64}$")
 MEDIA_MARKER = re.compile(r"【发布媒体:([a-zA-Z0-9_-]+)】")
+_BATCH_HASH_CACHE = ContextVar('batch_preflight_hash_cache', default=None)
 
 
 def now():
@@ -52,12 +54,36 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+@contextmanager
+def batch_preflight_hash_cache():
+    """Reuse stable hashes only during a local batch preflight, never execution."""
+    token = _BATCH_HASH_CACHE.set({})
+    try:
+        yield
+    finally:
+        _BATCH_HASH_CACHE.reset(token)
+
+
+def _fingerprint(path):
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
 def file_hash(path):
+    path = Path(path)
+    cache = _BATCH_HASH_CACHE.get()
+    before = _fingerprint(path) if cache is not None else None
+    key = (str(path), before)
+    if cache is not None and key in cache:
+        return cache[key]
     h = hashlib.sha256()
-    with Path(path).open("rb") as stream:
+    with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(block)
-    return h.hexdigest()
+    result = h.hexdigest()
+    if cache is not None and _fingerprint(path) == before:
+        cache[key] = result
+    return result
 
 
 def read_json(path):

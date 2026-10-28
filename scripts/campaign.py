@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-from publish_core import HEX, PublishError, Store, digest, preflight, read_json, run, target_of, validate, write_json
+from publish_core import HEX, PublishError, Store, batch_preflight_hash_cache, digest, preflight, read_json, run, target_of, validate, write_json
 
 FINISHED = {"draft_ready", "prefill_ready", "published", "broadcasted"}
 
@@ -39,26 +39,31 @@ def preflight_campaign(manifest_path, profile, target_ids=None):
     Invalid shared input is rejected before individual platform checks.
     """
     manifest = read_json(manifest_path)
-    common = validate(manifest)
-    selected = _select([t["id"] for t in manifest["targets"]], target_ids)
-    rows = []
-    for ident in selected:
-        target = target_of(manifest, ident)
-        row = {"target_id": ident, "platform": target["platform"],
-               "account": target["account"], "endpoint": target["endpoint"]}
-        try:
-            preflight(manifest, ident, profile)
-            row.update(local_ready=True)
-        except Exception as exc:
-            # Do not dump arbitrary dependency errors, which may contain secrets.
-            message = str(exc) if isinstance(exc, PublishError) else f"本地检查失败：{type(exc).__name__}"
-            row.update(local_ready=False, error=message)
-            if isinstance(exc, PublishError):
-                from preflight_advice import explain_known_blocker
-                issue = explain_known_blocker(message, target, manifest, profile)
-                if issue:
-                    row['issue'] = issue
-        rows.append(row)
+    with batch_preflight_hash_cache():
+        common = validate(manifest)
+        selected = _select([t["id"] for t in manifest["targets"]], target_ids)
+        rows = []
+        for ident in selected:
+            target = target_of(manifest, ident)
+            row = {"target_id": ident, "platform": target["platform"],
+                   "account": target["account"], "endpoint": target["endpoint"]}
+            try:
+                preflight(manifest, ident, profile)
+                row.update(local_ready=True)
+            except Exception as exc:
+                # Do not dump arbitrary dependency errors, which may contain secrets.
+                message = str(exc) if isinstance(exc, PublishError) else f"本地检查失败：{type(exc).__name__}"
+                row.update(local_ready=False, error=message)
+                if isinstance(exc, PublishError):
+                    from preflight_advice import explain_known_blocker
+                    issue = explain_known_blocker(message, target, manifest, profile)
+                    if issue:
+                        row['issue'] = issue
+            rows.append(row)
+    # Re-read all source bytes without the cache before reporting. This is a
+    # read-only advisory check; actual execution independently revalidates.
+    if validate(manifest) != common:
+        raise PublishError("批量预检期间交接内容发生改变；请重新预检")
     return {"manifest_digest": common["manifest_digest"],
             "selected_targets": selected, "targets": rows,
             "ready_count": sum(r["local_ready"] for r in rows),

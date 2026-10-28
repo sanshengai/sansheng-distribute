@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from campaign import authorize_campaign, campaign_status, prepare_campaign, preflight_campaign, run_campaign
@@ -91,6 +92,45 @@ print(json.dumps(o))
         with self.assertRaises(PublishError):
             preflight_campaign(self.path, self.profile)
         self.assertEqual(self.calls(), [])
+
+    def test_batch_preflight_hashes_shared_source_once_then_rechecks(self):
+        source = (self.root / 'source.txt').resolve()
+        real_open = Path.open
+        reads = []
+        def counted(path, *args, **kwargs):
+            if path == source and args and args[0] == 'rb':
+                reads.append(path)
+            return real_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', counted):
+            report = preflight_campaign(self.path, self.profile)
+        self.assertTrue(report['all_local_checks_passed'])
+        self.assertEqual(len(reads), 2)  # cached pass, then uncached final pass
+        self.assertEqual(self.calls(), [])
+
+    def test_batch_preflight_rechecks_bytes_even_if_metadata_cache_misses_change(self):
+        # Simulate an unreliable filesystem timestamp: a changed source must
+        # still be rejected by the independent full final validation.
+        import campaign
+        source = self.root / 'source.txt'
+        original = campaign.preflight
+        def mutate_after_check(*args, **kwargs):
+            result = original(*args, **kwargs)
+            source.write_text('改动原稿文字', encoding='utf-8')
+            return result
+        with patch('publish_core._fingerprint', return_value=(1, 2, 3, 4, 5)), \
+             patch('campaign.preflight', side_effect=mutate_after_check):
+            with self.assertRaisesRegex(PublishError, '源文件已改变'):
+                preflight_campaign(self.path, self.profile)
+        self.assertEqual(self.calls(), [])
+
+    def test_batch_cache_does_not_reuse_digest_after_same_size_edit(self):
+        from publish_core import batch_preflight_hash_cache, file_hash
+        source = (self.root / 'source.txt').resolve()
+        with batch_preflight_hash_cache():
+            before = file_hash(source)
+            source.write_bytes(b'x' * source.stat().st_size)
+            after = file_hash(source)
+        self.assertNotEqual(before, after)
 
     def test_local_preflight_cli_exit_status_and_no_state_directory(self):
         cli = Path(__file__).resolve().parents[1] / 'scripts' / 'publish.py'
