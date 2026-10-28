@@ -6,6 +6,7 @@ returned to the core ledger. An interrupted creation is never re-initiated.
 """
 from __future__ import annotations
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -71,6 +72,13 @@ def json_body(body):
     except (ValueError, UnicodeError): raise PublishError('YouTube 响应格式不符') from None
     if not isinstance(value, dict): raise PublishError('YouTube 响应格式不符')
     return value
+
+
+def tags_equal(actual, expected):
+    """YouTube can reorder tags; every declared tag and count must still match."""
+    return (isinstance(actual, list) and isinstance(expected, list)
+            and all(isinstance(tag, str) for tag in actual + expected)
+            and Counter(actual) == Counter(expected))
 
 
 def header(headers, key):
@@ -356,7 +364,7 @@ def dispatch(request_path, action, profile, client_factory=APIClient):
     if (item.get('id') != video_id or sn.get('channelId') != channel
             or sn.get('title') != resource['snippet']['title']
             or sn.get('description','') != resource['snippet']['description']
-            or sn.get('tags',[]) != resource['snippet'].get('tags',[])
+            or not tags_equal(sn.get('tags',[]), resource['snippet'].get('tags',[]))
             or st.get('privacyStatus') != 'public'
             or st.get('selfDeclaredMadeForKids') != resource['status']['selfDeclaredMadeForKids']):
         raise PublishError('YouTube 独立读回不匹配；不标记成功')
