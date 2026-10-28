@@ -15,6 +15,8 @@ def main():
     p = sub.add_parser("seal", help="锁定源文件哈希及已指定的媒体位置；不代表作者授权")
     p.add_argument("spec"); p.add_argument("--output", required=True)
     p = sub.add_parser("check"); p.add_argument("manifest")
+    p = sub.add_parser('media-inspect', help='只读检查封存视频的实际尺寸、时长和大小；不连接平台')
+    p.add_argument('manifest'); p.add_argument('--target', required=True)
     p = sub.add_parser('preflight', help='仅做本地依赖、账号配置与素材检查，不请求 token、不上传')
     p.add_argument('manifest'); p.add_argument('--target', required=True)
     p = sub.add_parser("status"); p.add_argument("--key")
@@ -24,6 +26,23 @@ def main():
     p.add_argument("key"); p.add_argument("--article-dir", required=True); p.add_argument("--write-scripts", required=True)
     p = sub.add_parser("continue-youtube", help="按原授权继续 YouTube 原上传会话；会写入平台，不创建新会话")
     p.add_argument("key")
+    p = sub.add_parser('youtube-bundle-prepare', help='封存 YouTube 视频与所需封面、合集的组合任务')
+    p.add_argument('manifest'); p.add_argument('--target', required=True)
+    for name in ('youtube-bundle-status', 'youtube-bundle-run', 'youtube-bundle-continue'):
+        p = sub.add_parser(name); p.add_argument('key')
+    p = sub.add_parser('youtube-component-prepare', help='为已核验的原视频准备独立封面或合集任务；不连接平台')
+    p.add_argument('key'); p.add_argument('--spec', required=True)
+    p = sub.add_parser('youtube-component-authorize', help='记录已有用户对具体组件任务的授权')
+    p.add_argument('key'); p.add_argument('--statement', required=True)
+    for name in ('youtube-component-status', 'youtube-component-revoke'):
+        p = sub.add_parser(name); p.add_argument('key')
+    for name in ('youtube-component-run', 'youtube-component-verify'):
+        p = sub.add_parser(name); p.add_argument('key'); p.add_argument('--part', choices=('cover', 'playlist'), required=True)
+    p = sub.add_parser('youtube-cover-review', help='记录观察者对平台读回封面的视觉复核；不发送平台请求')
+    p.add_argument('key'); p.add_argument('--parent-key', required=True); p.add_argument('--video-id', required=True)
+    p.add_argument('--cover-sha256', required=True); p.add_argument('--thumbnail-url', required=True)
+    p.add_argument('--thumbnail-path', required=True); p.add_argument('--reviewer', choices=('user', 'agent'), required=True)
+    p.add_argument('--statement', required=True); p.add_argument('--reviewed-at', required=True)
     p = sub.add_parser("resume-job", help="源文件或交接清单丢失时，按账本 key 只读恢复")
     p.add_argument("key")
     for name in ('recover-wechat','recover-x','recover-weibo'):
@@ -52,7 +71,7 @@ def main():
     args = parser.parse_args()
     store = None
     try:
-        if args.action not in {"seal", "check"}:
+        if args.action not in {"seal", "check", "media-inspect"}:
             # This read-only query never opens a ledger; don't require choosing
             # between legacy and new state directories merely to view guidance.
             state_hint = (args.state_dir or ".") if args.action == "platform-guide" else args.state_dir
@@ -66,6 +85,9 @@ def main():
             result = {"manifest": str(Path(args.output).resolve()), **validate(value)}
         elif args.action == "check":
             result = validate(read_json(args.manifest))
+        elif args.action == 'media-inspect':
+            from media_inspect import inspect
+            result = inspect(read_json(args.manifest), args.target)
         elif args.action == 'preflight':
             result = preflight(read_json(args.manifest), args.target, load_profile(args.profile))
         elif args.action == 'batch-preflight':
@@ -103,6 +125,30 @@ def main():
                 result = store.status(args.key)
             elif args.action == 'metrics':
                 result = store.metrics(args.key)
+            elif args.action == 'youtube-bundle-prepare':
+                result = store.prepare_youtube_bundle(read_json(args.manifest), args.target, load_profile(args.profile))
+            elif args.action == 'youtube-bundle-status':
+                result = store.youtube_bundle_status(args.key)
+            elif args.action in {'youtube-bundle-run', 'youtube-bundle-continue'}:
+                from publish_core import run_youtube_bundle
+                result = run_youtube_bundle(store, args.key, load_profile(args.profile),
+                                            continue_upload=args.action == 'youtube-bundle-continue')
+            elif args.action == 'youtube-component-prepare':
+                result = store.prepare_youtube_component(args.key, read_json(args.spec), load_profile(args.profile))
+            elif args.action == 'youtube-component-authorize':
+                result = store.authorize_youtube_component(args.key, args.statement)
+            elif args.action == 'youtube-component-status':
+                result = store.youtube_component_status(args.key)
+            elif args.action == 'youtube-component-revoke':
+                result = store.revoke_youtube_component(args.key)
+            elif args.action in {'youtube-component-run', 'youtube-component-verify'}:
+                from publish_core import run_youtube_component
+                result = run_youtube_component(store, args.key, args.part, load_profile(args.profile),
+                                               verify_only=args.action == 'youtube-component-verify')
+            elif args.action == 'youtube-cover-review':
+                result = store.record_youtube_cover_review(args.parent_key, args.video_id, args.cover_sha256,
+                    args.thumbnail_url, args.thumbnail_path, args.reviewer, args.statement, args.reviewed_at,
+                    component_key=args.key)
             elif args.action == "return-write":
                 from write_bridge import return_to_write
                 result = return_to_write(store,args.key,load_profile(args.profile),args.article_dir,args.write_scripts)

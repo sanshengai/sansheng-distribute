@@ -61,7 +61,12 @@ class VideoHandoffTests(unittest.TestCase):
                 pack = json.loads(output.read_text(encoding='utf-8'))
                 self.assertEqual(pack['platform_metadata'], manifest['targets'][0]['platform_metadata'])
                 self.assertEqual(pack['cover_asset_id'], 'cover')
-                self.assertIn('真实账号验收', ' '.join(pack['warnings']))
+                warnings = ' '.join(pack['warnings'])
+                self.assertIn('真实账号验收', warnings)
+                if platform == 'youtube':
+                    self.assertIn('已有单账号', warnings)
+                else:
+                    self.assertIn('尚未完成', warnings)
                 result = self.cli('--profile', profile, 'preflight', sealed, '--target', 'item')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('尚未启用/验收', result.stdout)

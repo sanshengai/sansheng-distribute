@@ -13,9 +13,10 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 class PublishError(ValueError):
@@ -339,6 +340,24 @@ class Store:
             phase TEXT NOT NULL CHECK(phase IN ('preflight','execute','continue','verify')),
             outcome TEXT NOT NULL CHECK(outcome IN ('completed','failed')),
             elapsed_ns INTEGER NOT NULL CHECK(elapsed_ns >= 0), started_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_component_jobs (
+            key TEXT PRIMARY KEY, parent_key TEXT NOT NULL, binding TEXT NOT NULL,
+            cover_state TEXT NOT NULL, playlist_state TEXT NOT NULL,
+            updated_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_component_grants (
+            key TEXT PRIMARY KEY, statement TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_component_events (
+            id INTEGER PRIMARY KEY, component_key TEXT NOT NULL, part TEXT NOT NULL,
+            state TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_cover_reviews (
+            id INTEGER PRIMARY KEY, parent_key TEXT NOT NULL, video_id TEXT NOT NULL,
+            cover_sha256 TEXT NOT NULL, thumbnail_url TEXT NOT NULL, thumbnail_sha256 TEXT NOT NULL,
+            reviewer TEXT NOT NULL, statement TEXT NOT NULL, reviewed_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_bundles (
+            parent_key TEXT PRIMARY KEY, manifest_digest TEXT NOT NULL, spec TEXT NOT NULL,
+            updated_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS youtube_bundle_component_grants (
+            component_key TEXT PRIMARY KEY, parent_grant_key TEXT NOT NULL);
         ''')
 
     def close(self):
@@ -381,6 +400,9 @@ class Store:
             self.db.execute("INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?,NULL,NULL,?)",
                             (key, report["manifest_digest"], ident, target["platform"], target["account"], target["endpoint"], "prepared", now()))
             job = self.status(key)
+            bundle = self.db.execute('SELECT manifest_digest FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone()
+            if bundle and bundle['manifest_digest'] != report['manifest_digest']:
+                raise PublishError('已有组合任务绑定另一完整清单；不能覆盖快照')
             if job["state"] == "prepared":
                 # A sealed snapshot is for recovery, even after source cleanup.
                 snapshot = self.directory / "snapshots" / f"{key}.json"
@@ -398,6 +420,430 @@ class Store:
                 raise PublishError("任务尚未 prepare")
             return dict(row)
         return [dict(x) for x in self.db.execute("SELECT * FROM jobs ORDER BY updated_at DESC")]
+
+    def prepare_youtube_bundle(self, manifest, ident, profile):
+        """Bind the full sealed target before video or component submission."""
+        validate(manifest)
+        target = target_of(manifest, ident)
+        from platform_pack import build_pack
+        from youtube_adapter import extract_component_spec
+        spec = extract_component_spec(build_pack(manifest, ident, profile))
+        if spec['cover'] is None and spec['playlist_id'] is None:
+            raise PublishError('组合任务至少需要封面或合集')
+        job = self.prepare(manifest, ident)
+        if target['platform'] != 'youtube' or target['endpoint'] != 'publish':
+            raise PublishError('组合任务仅支持 YouTube 发布')
+        with self.tx():
+            old = self.db.execute('SELECT * FROM youtube_bundles WHERE parent_key=?', (job['key'],)).fetchone()
+            if old and (old['manifest_digest'] != digest(manifest) or old['spec'] != canonical(spec)):
+                raise PublishError('已有组合任务与当前封存清单不一致')
+            if not old:
+                if job['state'] != 'prepared':
+                    raise PublishError('已有投稿任务不能事后变更成组合任务')
+                self.db.execute('INSERT INTO youtube_bundles VALUES (?,?,?,?)',
+                                (job['key'], digest(manifest), canonical(spec), now()))
+        return self.youtube_bundle_status(job['key'])
+
+    def youtube_bundle_status(self, key):
+        bundle = self.db.execute('SELECT * FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone()
+        if not bundle:
+            raise PublishError('组合任务尚未准备')
+        parent = self.status(key)
+        if bundle['manifest_digest'] != parent['manifest_digest']:
+            raise PublishError('组合任务与原封存版本不一致')
+        spec = json.loads(bundle['spec'])
+        components = [self.youtube_component_status(row['key']) for row in self.db.execute(
+            'SELECT key FROM youtube_component_jobs WHERE parent_key=? ORDER BY key', (key,))]
+        matched = {}
+        for part in ('cover', 'playlist'):
+            required = spec['cover'] if part == 'cover' else spec['playlist_id']
+            if required is None:
+                matched[part] = {'state': 'not_requested'}
+                continue
+            found = [item for item in components if (item['binding'].get('cover') == spec['cover'] if part == 'cover'
+                     else item['binding'].get('playlist_id') == spec['playlist_id'] and
+                          item['binding'].get('playlist_position') == spec['playlist_position'])]
+            if len(found) > 1:
+                raise PublishError('组合任务组件身份存在冲突')
+            matched[part] = {'key': found[0]['key'], 'state': found[0][part + '_state']} if found else {'state': 'not_started'}
+        event = self.db.execute("SELECT data FROM events WHERE job_key=? AND state='pending' ORDER BY id DESC", (key,)).fetchall()
+        attempts = [json.loads(row['data']) for row in event if json.loads(row['data']).get('_readback_attempt') is True]
+        latest = attempts[0] if attempts else {}
+        video = (latest.get('_readback_verified') is True and latest.get('stage') == 'youtube_components_pending' and
+                 latest.get('video_only_verified') is True and latest.get('remote_id') == parent.get('remote_id'))
+        return {'key': key, 'video_state': 'verified_public' if video else parent['state'],
+                'video_id': parent.get('remote_id'), 'overall_state': parent['state'], 'components': matched}
+
+    def _youtube_parent_ready(self, parent):
+        if parent['state'] == 'published':
+            return True
+        if parent['state'] != 'pending':
+            return False
+        try:
+            status = self.youtube_bundle_status(parent['key'])
+        except PublishError:
+            return False
+        return status['video_state'] == 'verified_public'
+
+    def mark_youtube_bundle_readback_unavailable(self, key):
+        """An unsuccessful final readback invalidates the earlier visible-video observation."""
+        with self.tx():
+            parent = self.status(key)
+            if parent['state'] != 'pending' or not parent.get('remote_id'):
+                raise PublishError('原视频不在可核验的组合任务状态')
+            if not self.db.execute('SELECT 1 FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone():
+                raise PublishError('缺少组合任务')
+            data = {'_readback_attempt':True, '_readback_verified':False,
+                    'stage':'youtube_readback_unavailable','remote_id':parent['remote_id']}
+            self.db.execute('INSERT INTO events(job_key,state,data,created_at) VALUES (?,?,?,?)',
+                            (key, 'pending', canonical(data), now()))
+
+    def finalize_youtube_bundle(self, key, *, profile=None):
+        """Freshly read video, playlist and reviewed cover in this call before completion."""
+        if not isinstance(profile, dict):
+            raise PublishError('组合收口需要本次只读核验的账号配置')
+        status = self.youtube_bundle_status(key)
+        parent = self.status(key)
+        if parent['state'] == 'published':
+            return status
+        components = status['components']
+        if (parent['state'] != 'pending' or status['video_state'] != 'verified_public'
+                or components['playlist']['state'] not in {'not_requested', 'verified'}
+                or components['cover']['state'] not in {'not_requested', 'visually_reviewed'}):
+            raise PublishError('视频或必需组件尚未完成，组合任务保持待处理')
+        snapshot_path = self.directory / 'snapshots' / f'{key}.json'
+        try:
+            run(snapshot_path, parent['target_id'], profile, self, resume=True, youtube_bundle=True)
+        except PublishError as exc:
+            self.mark_youtube_bundle_readback_unavailable(key)
+            status = self.youtube_bundle_status(key)
+            status['component_errors'] = {'video_readback':str(exc)}
+            return status
+        status = self.youtube_bundle_status(key)
+        if status['video_state'] != 'verified_public':
+            status['component_errors'] = {'video_readback':'视频当前状态尚未通过独立读回'}
+            return status
+        rows = self.db.execute("SELECT id,data FROM events WHERE job_key=? AND state='pending' ORDER BY id DESC", (key,)).fetchall()
+        video_event = next((row for row in rows if json.loads(row['data']).get('_readback_attempt') is True), None)
+        video_event_id = video_event['id'] if video_event else None
+        verified_events = {}
+        for part in ('playlist', 'cover'):
+            item = status['components'][part]
+            if item['state'] == 'not_requested':
+                continue
+            try:
+                component = run_youtube_component(self, item['key'], part, profile, verify_only=True)
+            except PublishError as exc:
+                observation = {'component_key':item['key'],'original_job_key':key,'video_id':parent['remote_id'],
+                               'part':part,'state':'unknown'}
+                self.observe_youtube_component(item['key'], part, observation, verified=True)
+                status = self.youtube_bundle_status(key)
+                status['component_errors'] = {part+'_readback':str(exc)}
+                return status
+            expected = 'verified' if part == 'playlist' else 'visually_reviewed'
+            if component[part+'_state'] != expected:
+                status = self.youtube_bundle_status(key)
+                status['component_errors'] = {part+'_readback':'当前读回与已确认结果不一致，须重新核验'}
+                return status
+            event = self.db.execute('''SELECT id FROM youtube_component_events WHERE component_key=?
+                AND part=? ORDER BY id DESC LIMIT 1''', (item['key'], part)).fetchone()
+            verified_events[part] = event['id'] if event else None
+        with self.tx():
+            status = self.youtube_bundle_status(key)
+            parent = self.status(key)
+            if parent['state'] == 'published':
+                return status
+            components = status['components']
+            if (parent['state'] != 'pending' or status['video_state'] != 'verified_public'
+                    or components['playlist']['state'] not in {'not_requested', 'verified'}
+                    or components['cover']['state'] not in {'not_requested', 'visually_reviewed'}):
+                raise PublishError('视频或必需组件尚未完成，组合任务保持待处理')
+            latest_video = self.db.execute("SELECT id,data FROM events WHERE job_key=? AND state='pending' ORDER BY id DESC", (key,)).fetchall()
+            latest_video = next((item for item in latest_video if json.loads(item['data']).get('_readback_attempt') is True), None)
+            if (type(video_event_id) is not int or not latest_video or latest_video['id'] != video_event_id
+                    or json.loads(latest_video['data']).get('_readback_verified') is not True):
+                raise PublishError('收口前须重新只读核验当前视频')
+            for part in ('playlist', 'cover'):
+                if components[part]['state'] == 'not_requested':
+                    continue
+                latest = self.db.execute('''SELECT id FROM youtube_component_events
+                    WHERE component_key=? AND part=? ORDER BY id DESC LIMIT 1''',
+                    (components[part]['key'], part)).fetchone()
+                if type(verified_events.get(part)) is not int or not latest or latest['id'] != verified_events[part]:
+                    raise PublishError('收口前须重新只读核验当前组件')
+            if not str(parent.get('remote_url') or '').startswith('https://'):
+                raise PublishError('已读回视频缺少永久地址')
+            observation = {'manifest_digest':parent['manifest_digest'], 'target_id':parent['target_id'],
+                           'platform':'youtube', 'account':parent['account'], 'state':'published',
+                           'remote_id':parent['remote_id'], 'remote_url':parent['remote_url'],
+                           'content_verified':True, 'stage':'youtube_bundle_completed',
+                           'components':components,
+                           'cover_evidence':'observer_visual_assertion' if components['cover']['state']=='visually_reviewed' else 'not_requested'}
+            self.db.execute("UPDATE jobs SET state='published',updated_at=? WHERE key=?", (now(), key))
+            self.db.execute('INSERT INTO events(job_key,state,data,created_at) VALUES (?,?,?,?)',
+                            (key, 'published', canonical(observation), now()))
+        return self.youtube_bundle_status(key)
+
+    def prepare_youtube_component(self, parent_key, spec, profile, *, from_bundle=False):
+        """Bind a separately authorized component task to one published video."""
+        if not isinstance(parent_key, str) or not HEX.fullmatch(parent_key):
+            raise PublishError('原任务 key 无效')
+        if not isinstance(spec, dict) or set(spec) != {'cover', 'playlist_id', 'playlist_position'}:
+            raise PublishError('组件清单字段不符合约定')
+        job = self.status(parent_key)
+        if job['platform'] != 'youtube' or job['endpoint'] != 'publish' or not self._youtube_parent_ready(job):
+            raise PublishError('仅支持接力已核验公开的 YouTube 原任务')
+        video_id = job.get('remote_id')
+        if not isinstance(video_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+            raise PublishError('原视频身份无效')
+        snapshot = read_json(self.directory / 'snapshots' / f'{parent_key}.json')
+        if digest(snapshot) != job['manifest_digest'] or self.key(snapshot, target_of(snapshot, job['target_id'])) != parent_key:
+            raise PublishError('原视频封存快照不一致')
+        account = profile.get('accounts', {}).get(job['account'], {})
+        channel = account.get('public_identities', {}).get('youtube')
+        if 'youtube' not in account.get('platforms', []) or not isinstance(channel, str) or not re.fullmatch(r'UC[A-Za-z0-9_-]{22}', channel):
+            raise PublishError('账号缺少已确认的 YouTube 频道身份')
+        cover, playlist, position = spec['cover'], spec['playlist_id'], spec['playlist_position']
+        if cover is None and playlist is None:
+            raise PublishError('至少指定封面或合集')
+        if cover is not None:
+            if not isinstance(cover, dict) or set(cover) != {'id', 'absolute_path', 'sha256'}:
+                raise PublishError('封面绑定字段不符合约定')
+            if not isinstance(cover['id'], str) or not ID.fullmatch(cover['id']) or not isinstance(cover['sha256'], str) or not HEX.fullmatch(cover['sha256']):
+                raise PublishError('封面身份或摘要无效')
+            path = Path(cover['absolute_path']) if isinstance(cover['absolute_path'], str) else Path('.')
+            if not path.is_absolute() or path.is_symlink() or not path.is_file() or file_hash(path) != cover['sha256']:
+                raise PublishError('封面文件不存在或摘要不一致')
+        if playlist is not None and (not isinstance(playlist, str) or not re.fullmatch(r'[A-Za-z0-9_-]{10,100}', playlist)):
+            raise PublishError('合集身份无效')
+        if position is not None and (playlist is None or type(position) is not int or position < 0):
+            raise PublishError('合集位置无效')
+        binding = {'original_job_key': parent_key, 'video_id': video_id, 'channel': channel,
+                   'cover': cover, 'playlist_id': playlist, 'playlist_position': position}
+        key = digest(binding)
+        with self.tx():
+            grant = None
+            if from_bundle:
+                bundle = self.db.execute('SELECT manifest_digest,spec FROM youtube_bundles WHERE parent_key=?', (parent_key,)).fetchone()
+                if not bundle or bundle['manifest_digest'] != job['manifest_digest']:
+                    raise PublishError('缺少原组合清单绑定')
+                full = json.loads(bundle['spec'])
+                allowed = [{'cover':full['cover'],'playlist_id':None,'playlist_position':None},
+                           {'cover':None,'playlist_id':full['playlist_id'],'playlist_position':full['playlist_position']}]
+                if spec not in allowed:
+                    raise PublishError('组件不属于原授权组合目标')
+                grant = self.db.execute('SELECT statement FROM grants WHERE key=?',
+                                        (digest([parent_key, job['manifest_digest']]),)).fetchone()
+                if not grant:
+                    raise PublishError('完整组合清单授权已撤销')
+            inserted = self.db.execute('INSERT OR IGNORE INTO youtube_component_jobs VALUES (?,?,?,?,?,?)',
+                                       (key, parent_key, canonical(binding), 'prepared' if cover else 'not_requested',
+                                        'prepared' if playlist else 'not_requested', now())).rowcount
+            if inserted and grant:
+                self.db.execute('INSERT INTO youtube_component_grants VALUES (?,?,?)', (key, grant['statement'], now()))
+                self.db.execute('INSERT INTO youtube_bundle_component_grants VALUES (?,?)',
+                                (key, digest([parent_key, job['manifest_digest']])))
+        return self.youtube_component_status(key)
+
+    def youtube_component_status(self, key):
+        if not isinstance(key, str) or not HEX.fullmatch(key):
+            raise PublishError('组件任务 key 无效')
+        row = self.db.execute('SELECT * FROM youtube_component_jobs WHERE key=?', (key,)).fetchone()
+        if row is None:
+            raise PublishError('组件任务尚未准备')
+        value = dict(row)
+        value['binding'] = json.loads(value['binding'])
+        if digest(value['binding']) != key:
+            raise PublishError('组件任务绑定已改变')
+        if value['cover_state'] == 'needs_visual_review':
+            event = self.db.execute('''SELECT data FROM youtube_component_events
+                WHERE component_key=? AND part='cover' AND state='needs_visual_review'
+                ORDER BY id DESC LIMIT 1''', (key,)).fetchone()
+            if event:
+                observed = json.loads(event['data'])
+                fields = ('thumbnail_url', 'thumbnail_path', 'thumbnail_sha256', 'cover_sha256')
+                if all(isinstance(observed.get(field), str) for field in fields):
+                    value['cover_visual_evidence'] = {field: observed[field] for field in fields}
+        return value
+
+    def authorize_youtube_component(self, key, statement):
+        _nonempty(statement, '实际用户授权原话')
+        with self.tx():
+            job = self.youtube_component_status(key)
+            parent = self.status(job['parent_key'])
+            if not self._youtube_parent_ready(parent) or parent.get('remote_id') != job['binding']['video_id']:
+                raise PublishError('原视频身份或状态已改变')
+            self.db.execute('INSERT OR REPLACE INTO youtube_component_grants VALUES (?,?,?)', (key, statement, now()))
+            self.db.execute('DELETE FROM youtube_bundle_component_grants WHERE component_key=?', (key,))
+        return {'key': key, 'authorized': True}
+
+    def revoke_youtube_component(self, key):
+        with self.tx():
+            self.youtube_component_status(key)
+            self.db.execute('DELETE FROM youtube_component_grants WHERE key=?', (key,))
+        return {'key': key, 'authorized': False}
+
+    def begin_youtube_component(self, key, part, profile):
+        if part not in {'cover', 'playlist'}:
+            raise PublishError('未知 YouTube 组件')
+        with self.tx():
+            job = self.youtube_component_status(key)
+            parent = self.status(job['parent_key'])
+            if parent['platform'] != 'youtube' or not self._youtube_parent_ready(parent) or parent.get('remote_id') != job['binding']['video_id']:
+                raise PublishError('原视频身份或状态已改变')
+            account = profile.get('accounts', {}).get(parent['account'], {})
+            if account.get('restricted') or account.get('public_identities', {}).get('youtube') != job['binding']['channel']:
+                raise PublishError('账号受限或频道身份已改变')
+            if not self.db.execute('SELECT 1 FROM youtube_component_grants WHERE key=?', (key,)).fetchone():
+                raise PublishError('缺少组件任务授权')
+            inherited = self.db.execute('SELECT parent_grant_key FROM youtube_bundle_component_grants WHERE component_key=?', (key,)).fetchone()
+            if inherited and not self.db.execute('SELECT 1 FROM grants WHERE key=?', (inherited['parent_grant_key'],)).fetchone():
+                raise PublishError('组合原授权已撤销，不能继续组件写入')
+            field = 'cover_state' if part == 'cover' else 'playlist_state'
+            if job[field] not in {'prepared', 'needs_authorization'}:
+                raise PublishError('组件已有执行记录，须先查询，禁止重复提交')
+            lock = self.db.execute('SELECT job_key FROM account_locks WHERE platform=? AND account=?',
+                                   (parent['platform'], parent['account'])).fetchone()
+            if lock and lock['job_key'] != key:
+                raise PublishError('该账号已有其他执行或结果未知任务')
+            if not lock:
+                self.db.execute('INSERT INTO account_locks VALUES (?,?,?)', (parent['platform'], parent['account'], key))
+            snapshot = read_json(self.directory / 'snapshots' / f"{job['parent_key']}.json")
+            if digest(snapshot) != parent['manifest_digest']:
+                raise PublishError('原视频封存快照不一致')
+            from rate_policy import apply_pacing
+            apply_pacing(self.db, profile, target_of(snapshot, parent['target_id']))
+            self.db.execute(f'UPDATE youtube_component_jobs SET {field}=?,updated_at=? WHERE key=?', ('unknown', now(), key))
+            self.db.execute('INSERT INTO youtube_component_events(component_key,part,state,data,created_at) VALUES (?,?,?,?,?)',
+                            (key, part, 'unknown', '{}', now()))
+        return self.youtube_component_status(key)
+
+    def observe_youtube_component(self, key, part, observation, *, verified=False):
+        """Record only same-video component evidence; unknown can never be replayed."""
+        if part not in {'cover', 'playlist'} or not isinstance(observation, dict):
+            raise PublishError('组件观察无效')
+        with self.tx():
+            job = self.youtube_component_status(key)
+            parent = self.status(job['parent_key'])
+            expected = {'component_key': key, 'original_job_key': job['parent_key'],
+                        'video_id': job['binding']['video_id'], 'part': part}
+            if any(observation.get(k) != v for k, v in expected.items()):
+                raise PublishError('组件观察身份不匹配')
+            state = observation.get('state')
+            allowed = {'unknown', 'needs_authorization', 'accepted'} if not verified else {'unknown', 'needs_visual_review', 'verified', 'visually_reviewed'}
+            if (state not in allowed or (state == 'verified' and part != 'playlist')
+                    or (state in {'needs_visual_review', 'visually_reviewed'} and part != 'cover')):
+                raise PublishError('组件观察状态不符合动作')
+            field = 'cover_state' if part == 'cover' else 'playlist_state'
+            allowed_previous = {'unknown', 'accepted', 'needs_visual_review'}
+            if verified and part == 'playlist':
+                allowed_previous.add('verified')
+            if verified and part == 'cover':
+                allowed_previous.add('visually_reviewed')
+            if job[field] not in allowed_previous:
+                raise PublishError('组件没有可核验的执行记录')
+            if state == 'needs_authorization' and observation.get('no_write') is not True:
+                raise PublishError('未证明没有发送合集请求')
+            if state == 'visually_reviewed':
+                cover = job['binding'].get('cover')
+                review = self.youtube_cover_review(job['parent_key'], job['binding']['video_id'], cover['sha256']) if cover else None
+                if (not review or observation.get('thumbnail_url') != review['thumbnail_url']
+                        or observation.get('thumbnail_sha256') != review['thumbnail_sha256']
+                        or observation.get('cover_sha256') != review['cover_sha256']):
+                    raise PublishError('当前封面读回与视觉审核证据不一致')
+            self.db.execute(f'UPDATE youtube_component_jobs SET {field}=?,updated_at=? WHERE key=?', (state, now(), key))
+            self.db.execute('INSERT INTO youtube_component_events(component_key,part,state,data,created_at) VALUES (?,?,?,?,?)',
+                            (key, part, state, canonical(observation), now()))
+            updated = self.youtube_component_status(key)
+            if state in {'needs_authorization', 'needs_visual_review', 'verified', 'visually_reviewed'} and not any(
+                    value in {'unknown', 'accepted'} for value in (updated['cover_state'], updated['playlist_state'])):
+                self.db.execute('DELETE FROM account_locks WHERE platform=? AND account=? AND job_key=?',
+                                (parent['platform'], parent['account'], key))
+        return self.youtube_component_status(key)
+
+    def record_youtube_cover_review(self, parent_key, video_id, cover_sha256, thumbnail_url,
+                                    thumbnail_path, reviewer, statement, reviewed_at, *, component_key=None):
+        """Store an attributed visual review; this method never writes to YouTube."""
+        parent = self.status(parent_key)
+        if parent['platform'] != 'youtube' or parent['state'] == 'prepared' or parent.get('remote_id') != video_id:
+            raise PublishError('封面审核的视频身份不匹配')
+        if not isinstance(cover_sha256, str) or not HEX.fullmatch(cover_sha256):
+            raise PublishError('封面摘要无效')
+        snapshot = read_json(self.directory / 'snapshots' / f'{parent_key}.json')
+        if digest(snapshot) != parent['manifest_digest']:
+            raise PublishError('原任务封存快照不一致')
+        if component_key is None:
+            raise PublishError('视觉审核需绑定组件任务及其平台缩略图读回')
+        component = self.youtube_component_status(component_key)
+        if component['parent_key'] != parent_key or component['binding']['video_id'] != video_id:
+            raise PublishError('组件任务与原视频不匹配')
+        if component['cover_state'] != 'needs_visual_review':
+            raise PublishError('封面尚无可审核的独立读回')
+        cover = component['binding'].get('cover')
+        if not cover or cover.get('sha256') != cover_sha256:
+            raise PublishError('审核封面与封存素材不一致')
+        if reviewer not in {'user', 'agent'}:
+            raise PublishError('审核者必须明确是用户或 Agent')
+        _nonempty(statement, '具体视觉审核说明')
+        if len(statement) > 1000:
+            raise PublishError('视觉审核说明过长')
+        if not isinstance(thumbnail_url, str):
+            raise PublishError('缺少平台缩略图地址')
+        parsed = urlsplit(thumbnail_url)
+        parts = parsed.path.strip('/').split('/')
+        if (parsed.scheme != 'https' or parsed.hostname != 'i.ytimg.com' or parsed.username or parsed.password
+                or parsed.port not in (None, 443) or len(parts) < 3 or parts[0] not in {'vi','vi_webp'} or parts[1] != video_id):
+            raise PublishError('平台缩略图地址与视频不匹配')
+        image = Path(thumbnail_path) if isinstance(thumbnail_path, str) else Path('.')
+        if not image.is_absolute() or image.is_symlink() or not image.is_file() or not 0 < image.stat().st_size <= 50 * 1024 * 1024:
+            raise PublishError('视觉审核图片文件不可用')
+        thumbnail_sha256 = file_hash(image)
+        event = self.db.execute('''SELECT id,data,created_at FROM youtube_component_events
+            WHERE component_key=? AND part='cover' AND state='needs_visual_review'
+            ORDER BY id DESC LIMIT 1''', (component_key,)).fetchone()
+        if event is None:
+            raise PublishError('缺少适配器的平台封面下载证据')
+        observation = json.loads(event['data'])
+        if (observation.get('thumbnail_url') != thumbnail_url
+                or observation.get('thumbnail_path') != str(image)
+                or observation.get('thumbnail_sha256') != thumbnail_sha256
+                or observation.get('cover_sha256') != cover_sha256):
+            raise PublishError('审核图片与适配器的平台封面读回不一致')
+        try:
+            when = datetime.fromisoformat(reviewed_at.replace('Z','+00:00'))
+            if when.tzinfo is None or when.utcoffset() is None or when > datetime.now(timezone.utc) + timedelta(minutes=5):
+                raise ValueError
+            if when < datetime.fromisoformat(event['created_at'].replace('Z','+00:00')):
+                raise ValueError
+        except (AttributeError, ValueError, OverflowError):
+            raise PublishError('审核时间必须为不晚于当前时间的带时区时间') from None
+        review = {'original_job_key':parent_key, 'video_id':video_id, 'cover_sha256':cover_sha256,
+                  'thumbnail_url':thumbnail_url, 'thumbnail_sha256':thumbnail_sha256,
+                  'reviewer':reviewer, 'statement':statement.strip(), 'reviewed_at':when.astimezone(timezone.utc).isoformat(),
+                  'review_kind':'observer_visual_assertion', 'platform_image_source':'adapter_download'}
+        with self.tx():
+            current = self.status(parent_key)
+            if current.get('remote_id') != video_id:
+                raise PublishError('原视频身份已变化')
+            latest = self.db.execute('''SELECT id FROM youtube_component_events
+                WHERE component_key=? AND part='cover' ORDER BY id DESC LIMIT 1''', (component_key,)).fetchone()
+            if (self.youtube_component_status(component_key)['cover_state'] != 'needs_visual_review'
+                    or latest is None or latest['id'] != event['id'] or file_hash(image) != thumbnail_sha256):
+                raise PublishError('封面读回或审核图片在记录时已变化')
+            self.db.execute('''INSERT INTO youtube_cover_reviews
+                (parent_key,video_id,cover_sha256,thumbnail_url,thumbnail_sha256,reviewer,statement,reviewed_at)
+                VALUES (?,?,?,?,?,?,?,?)''', tuple(review[k] for k in ('original_job_key','video_id','cover_sha256','thumbnail_url','thumbnail_sha256','reviewer','statement','reviewed_at')))
+            self.db.execute("UPDATE youtube_component_jobs SET cover_state='visually_reviewed',updated_at=? WHERE key=?", (now(), component_key))
+            self.db.execute('INSERT INTO youtube_component_events(component_key,part,state,data,created_at) VALUES (?,?,?,?,?)',
+                            (component_key, 'cover', 'visually_reviewed', canonical(review), now()))
+        return review
+
+    def youtube_cover_review(self, parent_key, video_id, cover_sha256):
+        row = self.db.execute('''SELECT parent_key AS original_job_key,video_id,cover_sha256,thumbnail_url,
+            thumbnail_sha256,reviewer,statement,reviewed_at FROM youtube_cover_reviews
+            WHERE parent_key=? AND video_id=? AND cover_sha256=? ORDER BY id DESC LIMIT 1''',
+            (parent_key, video_id, cover_sha256)).fetchone()
+        return dict(row) if row else None
 
     @contextmanager
     def measure(self, key, phase):
@@ -562,8 +1008,13 @@ class Store:
             stored_state = "prepared" if state == "not_submitted" else state
             self.db.execute("UPDATE jobs SET state=?,remote_id=?,remote_url=?,updated_at=? WHERE key=?",
                             (stored_state, observation.get("remote_id"), observation.get("remote_url"), now(), key))
+            data = dict(observation)
+            if self.db.execute('SELECT 1 FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone():
+                # Never trust an execute response to assert that independent readback happened.
+                data['_readback_verified'] = bool(verified)
+                data['_readback_attempt'] = bool(verified)
             self.db.execute("INSERT INTO events(job_key,state,data,created_at) VALUES (?,?,?,?)",
-                            (key, stored_state, canonical(observation), now()))
+                            (key, stored_state, canonical(data), now()))
             if verified:
                 self.db.execute("DELETE FROM account_locks WHERE job_key=?", (key,))
         return self.status(key)
@@ -622,18 +1073,28 @@ def adapter_config(profile, target, *, readonly=False, manifest=None):
     return config
 
 
-def preflight(manifest, ident, profile):
+def preflight(manifest, ident, profile, *, youtube_continuation=False, youtube_bundle=False):
     """Local-only checks before claiming a remote submission window."""
     report = validate(manifest)
     target = target_of(manifest, ident)
-    config = adapter_config(profile, target, manifest=manifest)
+    if youtube_bundle and (target['platform'] != 'youtube' or target['endpoint'] != 'publish'):
+        raise PublishError('组合预检仅适用于 YouTube 投稿')
+    if youtube_continuation and (target['platform'] != 'youtube' or target['endpoint'] != 'publish'):
+        raise PublishError('续跑预检仅适用于原 YouTube 投稿')
+    if youtube_continuation and profile.get('accounts', {}).get(target['account'], {}).get('restricted'):
+        raise PublishError('账号受限，仅允许只读核验')
+    # Only preflight uses the read-only capability lookup here. The original
+    # grant and account lock are checked by begin_youtube_continue before I/O.
+    config = adapter_config(profile, target, readonly=youtube_continuation, manifest=manifest)
     from rate_policy import parse_pacing
     parse_pacing(profile, target)
     if target['platform'] != 'wechat':
         from platform_pack import build_pack
         build_pack(manifest, ident, profile)
     for action in ('execute', 'verify'):
-        argv = config[action]
+        argv = config.get(action)
+        if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
+            raise PublishError(f'适配器缺少 {action} 命令数组')
         if not shutil.which(argv[0]):
             raise PublishError(f'适配器 {action} 的可执行程序不存在')
         if len(argv) > 1 and argv[1].endswith('.py') and not Path(argv[1]).is_file():
@@ -646,7 +1107,7 @@ def preflight(manifest, ident, profile):
             preflight_wechat(manifest, target, profile, argv)
         if any(Path(a).name == 'youtube_adapter.py' for a in argv):
             from youtube_adapter import preflight_youtube
-            preflight_youtube(manifest, target, profile, argv, expected_action=action)
+            preflight_youtube(manifest, target, profile, argv, expected_action=action, bundle=youtube_bundle)
         if any(Path(a).name == 'bilibili_adapter.py' for a in argv):
             from bilibili_adapter import preflight_bilibili
             preflight_bilibili(manifest, target, profile, argv)
@@ -709,13 +1170,164 @@ def invoke(config, action, request_path, *, lock_fd):
     return value
 
 
-def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", youtube_continue=False):
+def run_youtube_component(store, key, part, profile, *, verify_only=False):
+    """Run one existing-video component under its own grant; recovery is read-only."""
+    if part not in {'cover', 'playlist'} or type(verify_only) is not bool:
+        raise PublishError('组件动作无效')
+    component = store.youtube_component_status(key)
+    parent = store.status(component['parent_key'])
+    snapshot_path = store.directory / 'snapshots' / f"{component['parent_key']}.json"
+    manifest = read_json(snapshot_path)
+    if (parent['platform'] != 'youtube' or not store._youtube_parent_ready(parent)
+            or parent.get('remote_id') != component['binding']['video_id']
+            or digest(manifest) != parent['manifest_digest']):
+        raise PublishError('原视频状态、身份或封存快照不一致')
+    target = target_of(manifest, parent['target_id'])
+    if store.key(manifest, target) != component['parent_key']:
+        raise PublishError('原视频目标身份不一致')
+    config = adapter_config(profile, target, readonly=True, manifest=manifest)
+    account = profile.get('accounts', {}).get(parent['account'], {})
+    if not verify_only and account.get('youtube_allow_component_write') is not True:
+        raise PublishError('YouTube 组件写入未为该账号显式启用')
+    field = 'cover_state' if part == 'cover' else 'playlist_state'
+    allowed_readback = {'unknown', 'accepted', 'needs_visual_review'} | ({'verified'} if part == 'playlist' else {'visually_reviewed'})
+    if verify_only and component[field] not in allowed_readback:
+        raise PublishError('组件没有可只读核验的执行记录')
+    actions = ('verify_component',) if verify_only else ('component', 'verify_component')
+    from youtube_adapter import preflight_youtube
+    for action in actions:
+        argv = config.get(action)
+        if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
+            raise PublishError(f'适配器缺少 {action} 命令数组')
+        if not shutil.which(argv[0]):
+            raise PublishError(f'适配器 {action} 的可执行程序不存在')
+        preflight_youtube(manifest, target, profile, argv, expected_action=action)
+    lock_dir = store.directory / 'locks'
+    lock_dir.mkdir(exist_ok=True)
+    lock = lock_dir / (digest({'platform': parent['platform'], 'account': parent['account']}) + '.lock')
+    with lock.open('a') as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PublishError('该账号执行器仍在运行，不能并发提交或读回重置') from exc
+        component = store.youtube_component_status(key)
+        binding = component['binding']
+        request_path = store.directory / 'requests' / f'{key}.component.json'
+        request = {'schema_version': 1, 'manifest_path': str(snapshot_path),
+                   'manifest_digest': digest(manifest), 'target': target, 'job': parent,
+                   'component_job': {'component_key': key, 'component_digest': key,
+                       **binding, 'part': part}}
+        write_json(request_path, request)
+        if not verify_only:
+            store.begin_youtube_component(key, part, profile)
+            response = invoke(config, 'component', request_path, lock_fd=stream.fileno())
+            current = store.observe_youtube_component(key, part, response)
+            if current[field] in {'unknown', 'needs_authorization'}:
+                return current
+        observation = invoke(config, 'verify_component', request_path, lock_fd=stream.fileno())
+        if (verify_only and part == 'cover' and component[field] == 'visually_reviewed'
+                and observation.get('state') == 'needs_visual_review'):
+            review = store.youtube_cover_review(component['parent_key'], binding['video_id'], binding['cover']['sha256'])
+            if (review and observation.get('thumbnail_url') == review['thumbnail_url']
+                    and observation.get('thumbnail_sha256') == review['thumbnail_sha256']
+                    and observation.get('cover_sha256') == review['cover_sha256']):
+                observation = dict(observation, state='visually_reviewed')
+        return store.observe_youtube_component(key, part, observation, verified=True)
+
+
+def run_youtube_bundle(store, key, profile, *, continue_upload=False):
+    """Complete a full authorized target without treating video acceptance as bundle success."""
+    if type(continue_upload) is not bool:
+        raise PublishError('组合任务续传选项无效')
+    status = store.youtube_bundle_status(key)
+    parent = store.status(key)
+    if parent['state'] == 'published':
+        return status
+    snapshot_path = store.directory / 'snapshots' / f'{key}.json'
+    manifest = read_json(snapshot_path)
+    if digest(manifest) != parent['manifest_digest']:
+        raise PublishError('组合任务封存清单不一致')
+    grant = store.db.execute('SELECT statement FROM grants WHERE key=?',
+                             (digest([key, digest(manifest)]),)).fetchone()
+    if not grant:
+        raise PublishError('缺少完整封存清单的原授权')
+    if status['video_state'] != 'verified_public':
+        if parent['state'] == 'prepared':
+            if continue_upload:
+                raise PublishError('尚未开始上传，不能继续会话')
+            target = target_of(manifest, parent['target_id'])
+            account = profile.get('accounts', {}).get(parent['account'], {})
+            if account.get('youtube_allow_component_write') is not True:
+                raise PublishError('组合投稿前须为该账号显式启用组件写入')
+            config = adapter_config(profile, target, readonly=True, manifest=manifest)
+            from youtube_adapter import preflight_youtube
+            for action in ('component', 'verify_component'):
+                argv = config.get(action)
+                if (not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv)
+                        or not shutil.which(argv[0])):
+                    raise PublishError(f'组合投稿前缺少可用的 {action} 适配器')
+                preflight_youtube(manifest, target, profile, argv, expected_action=action)
+            run(snapshot_path, parent['target_id'], profile, store, youtube_bundle=True)
+        elif parent['state'] in {'submission_unknown', 'pending'}:
+            run(snapshot_path, parent['target_id'], profile, store, resume=True,
+                youtube_continue=continue_upload, youtube_bundle=True)
+        else:
+            return store.youtube_bundle_status(key)
+        status = store.youtube_bundle_status(key)
+    if status['video_state'] != 'verified_public':
+        return status
+    parent = store.status(key)
+    bundle = store.db.execute('SELECT spec FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone()
+    spec = json.loads(bundle['spec'])
+    from platform_pack import build_pack
+    from youtube_adapter import extract_component_spec
+    current_spec = extract_component_spec(build_pack(manifest, parent['target_id'], profile, check_files=False))
+    if spec != current_spec:
+        raise PublishError('组合任务组件与原封存清单不一致')
+    account = profile.get('accounts', {}).get(parent['account'], {})
+    channel = account.get('public_identities', {}).get('youtube')
+    errors = {}
+    # Separate tasks let a missing cover file leave the playlist independently actionable.
+    for part in ('playlist', 'cover'):
+        selected = {'cover': spec['cover'] if part == 'cover' else None,
+                    'playlist_id': spec['playlist_id'] if part == 'playlist' else None,
+                    'playlist_position': spec['playlist_position'] if part == 'playlist' else None}
+        if selected['cover'] is None and selected['playlist_id'] is None:
+            continue
+        binding = {'original_job_key': key, 'video_id': parent['remote_id'], 'channel': channel, **selected}
+        component_key = digest(binding)
+        try:
+            component = store.prepare_youtube_component(key, selected, profile, from_bundle=True)
+            if component['key'] != component_key:
+                raise PublishError('组件身份与原清单不一致')
+            state = component[part + '_state']
+            if state in {'prepared', 'needs_authorization'}:
+                run_youtube_component(store, component_key, part, profile)
+            elif state in {'unknown', 'accepted'}:
+                run_youtube_component(store, component_key, part, profile, verify_only=True)
+        except PublishError as exc:
+            errors[part] = str(exc)
+    status = store.youtube_bundle_status(key)
+    if errors:
+        status['component_errors'] = errors
+    elif (status['components']['playlist']['state'] in {'not_requested', 'verified'}
+          and status['components']['cover']['state'] in {'not_requested', 'visually_reviewed'}):
+        status = store.finalize_youtube_bundle(key, profile=profile)
+    return status
+
+
+def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", youtube_continue=False, youtube_bundle=False):
     # A live executor must not be reclassified by a concurrent "not found" query.
     # A foreground child inherits the lock even if its parent dies.
     manifest = read_json(manifest_path)
     if not resume:
         validate(manifest)
     target = target_of(manifest, ident)
+    if youtube_bundle:
+        key = store.key(manifest, target)
+        bundle = store.db.execute('SELECT manifest_digest FROM youtube_bundles WHERE parent_key=?', (key,)).fetchone()
+        if not bundle or bundle['manifest_digest'] != digest(manifest):
+            raise PublishError('缺少绑定完整清单的组合任务')
     lock_dir = store.directory / "locks"
     lock_dir.mkdir(exist_ok=True)
     lock = lock_dir / (digest({"platform": target["platform"], "account": target["account"]}) + ".lock")
@@ -726,10 +1338,10 @@ def run(manifest_path, ident, profile, store, *, resume=False, advance=False, ad
             raise PublishError("该账号执行器仍在运行，不能并发提交或读回重置") from exc
         # Close our reference without LOCK_UN: an orphan child may still own it.
         return _run_locked(manifest, ident, profile, store, resume=resume, advance=advance, adopt=adopt,
-                           recover_remote_id=recover_remote_id, recovery_platform=recovery_platform, lock_fd=stream.fileno(), youtube_continue=youtube_continue)
+                           recover_remote_id=recover_remote_id, recovery_platform=recovery_platform, lock_fd=stream.fileno(), youtube_continue=youtube_continue, youtube_bundle=youtube_bundle)
 
 
-def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", lock_fd, youtube_continue=False):
+def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", lock_fd, youtube_continue=False, youtube_bundle=False):
     if not resume:
         validate(manifest)
     target = target_of(manifest, ident)
@@ -757,7 +1369,9 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if digest(manifest) != job["manifest_digest"]:
             raise PublishError("恢复快照与账本不一致")
         target = target_of(manifest, ident)
-    config = adapter_config(profile, target, readonly=(resume or adopt) and not youtube_continue, manifest=manifest)
+    continuation_opt_in = (youtube_continue and profile.get('accounts', {}).get(target['account'], {})
+                           .get('youtube_allow_authorized_continuation') is True)
+    config = adapter_config(profile, target, readonly=(resume or adopt) and (not youtube_continue or continuation_opt_in), manifest=manifest)
     if adopt:
         job = store.bind_existing(manifest, ident)
         resume = True
@@ -765,6 +1379,8 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
     request = {"schema_version": 1, "manifest_path": str(snapshot_path), "manifest_digest": digest(manifest),
                "document_snapshot_path": str(snapshot_path.with_suffix(".documents.json")),
                "target": target, "job": job}
+    if youtube_bundle:
+        request['youtube_bundle'] = True
     if recover_remote_id is not None:
         request['recovery_remote_id'] = recover_remote_id
         request['recovery_platform'] = recovery_platform
@@ -777,9 +1393,9 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if not any(Path(x).name == 'youtube_adapter.py' for x in command):
             raise PublishError('YouTube 续传仅允许受控的原会话适配器')
         with store.measure(key, 'preflight'):
-            preflight(manifest, ident, profile)
+            preflight(manifest, ident, profile, youtube_continuation=continuation_opt_in, youtube_bundle=youtube_bundle)
             from youtube_adapter import preflight_youtube
-            preflight_youtube(manifest, target, profile, command, expected_action='continue')
+            preflight_youtube(manifest, target, profile, command, expected_action='continue', bundle=youtube_bundle)
         write_json(request_path, request)
         store.begin_youtube_continue(manifest, ident, profile=profile)
         with store.measure(key, 'continue'):
@@ -790,6 +1406,9 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         request['job'] = store.status(key)
         write_json(request_path, request)
         with store.measure(key, 'verify'):
+            if youtube_bundle:
+                from youtube_adapter import preflight_youtube
+                preflight_youtube(manifest, target, profile, config['verify'], expected_action='verify', bundle=True, recovery=True)
             observation = invoke(config, 'verify', request_path, lock_fd=lock_fd)
             return store.save_observation(key, observation, verified=True)
     if advance:
@@ -817,7 +1436,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
     if not resume:
         if not advance:
             with store.measure(key,'preflight'):
-                preflight(manifest, ident, profile)
+                preflight(manifest, ident, profile, youtube_bundle=youtube_bundle)
         # Prepare all fallible local writes before claiming the remote mutation window.
         write_json(request_path, request)
         store.begin(manifest, ident, profile=profile)
@@ -832,6 +1451,9 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
     request["job"] = store.status(key)
     write_json(request_path, request)
     with store.measure(key,'verify'):
+        if youtube_bundle:
+            from youtube_adapter import preflight_youtube
+            preflight_youtube(manifest, target, profile, config['verify'], expected_action='verify', bundle=True, recovery=True)
         observation = invoke(config, "verify", request_path, lock_fd=lock_fd)
         if recover_remote_id is not None and (observation.get('remote_id') != recover_remote_id
                 or observation.get('recovery_verified') is not True):

@@ -105,9 +105,11 @@ def build_pack(manifest, target_id, profile=None, *, check_files=True):
         pack['warnings'].append('text 与 description 不同：各自保留，执行时按平台字段映射，禁止丢弃描述')
     if subtitles: pack['checks'].append('全部字幕必须独立确认上传或明确退回生产端；不得声称无字幕的成片已包含字幕')
     if platform in {'youtube','alipay'}:
-        pack['warnings'].append('本地交接与 Agent 工作单；自动上传和平台状态读取尚未完成真实账号验收')
         if platform == 'youtube':
-            pack['warnings'].append('官方 API 上传候选默认关闭，当前仅支持单公开视频素材；封面、合集与字幕须走其他经核验路线')
+            pack['warnings'].append('本地交接与 Agent 工作单；官方 API 视频上传已有单账号真实账号验收，不自动开放其他账号')
+            pack['warnings'].append('官方 API 上传候选默认关闭；新视频与封面、合集的完整自动交接及字幕需按实际验收范围判断')
+        else:
+            pack['warnings'].append('本地交接与 Agent 工作单；自动上传和平台状态读取尚未完成真实账号验收')
         pack['checks'].append('逐项核对全部 platform_metadata，未映射字段不得静默丢弃；指定封面、合集或声明无法落实时停下')
     return pack
 

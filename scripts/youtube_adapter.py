@@ -7,6 +7,7 @@ returned to the core ledger. An interrupted creation is never re-initiated.
 from __future__ import annotations
 import argparse
 from collections import Counter
+import hashlib
 import json
 import os
 import re
@@ -44,6 +45,35 @@ class APIClient:
                 if response.status != 200: return None
                 return json_body(response.read(1024*1024+1))
         except (OSError, ValueError, PublishError):
+            return None
+
+    def granted_scopes(self):
+        request = urllib.request.Request('https://oauth2.googleapis.com/tokeninfo', method='POST',
+            data=urllib.parse.urlencode({'access_token':self.token}).encode(),
+            headers={'Content-Type':'application/x-www-form-urlencoded'})
+        try:
+            with self.opener.open(request, timeout=30) as response:
+                if response.status != 200: raise PublishError('授权范围无法核验')
+                scope = json_body(response.read(1024*1024+1)).get('scope')
+        except (OSError, ValueError, PublishError):
+            raise PublishError('授权范围无法核验') from None
+        if not isinstance(scope, str): raise PublishError('授权范围无法核验')
+        return set(scope.split())
+
+    def thumbnail(self, url, video_id):
+        parsed = urllib.parse.urlsplit(url if isinstance(url, str) else '')
+        parts = parsed.path.strip('/').split('/')
+        if (parsed.scheme != 'https' or parsed.hostname != 'i.ytimg.com' or parsed.username or parsed.password
+            or parsed.port not in (None,443) or parsed.fragment or len(parts) != 3
+            or parts[:2] not in (['vi',video_id], ['vi_webp',video_id])
+            or parts[2] not in {'default.jpg','maxresdefault.jpg','hqdefault.jpg','mqdefault.jpg','sddefault.jpg','fhddefault.jpg','default.webp','maxresdefault.webp','hqdefault.webp','mqdefault.webp','sddefault.webp'}):
+            raise PublishError('YouTube 封面地址不可信')
+        try:
+            with self.opener.open(urllib.request.Request(url), timeout=30) as response:
+                if response.status != 200: return None
+                data = response.read(16*1024*1024+1)
+            return data if 0 < len(data) <= 16*1024*1024 else None
+        except (OSError, ValueError):
             return None
 
     def call(self, method, url, *, headers=None, data=None):
@@ -147,18 +177,52 @@ def identity(client, expected):
         raise PublishError('YouTube OAuth 频道与目标频道不一致')
 
 
-def make_plan(pack):
+def extract_component_spec(pack):
+    """Inspect sealed bundle fields without authorizing or writing anything."""
+    if not isinstance(pack,dict) or not isinstance(pack.get('platform_metadata'),dict):
+        raise PublishError('YouTube 交接包格式无效')
+    metadata=pack['platform_metadata']; assets=pack.get('assets')
+    if not isinstance(assets,list) or not all(isinstance(a,dict) for a in assets):
+        raise PublishError('YouTube 素材格式无效')
+    playlist=metadata.get('playlist_id'); position=metadata.get('playlist_position')
+    if playlist is not None and (not isinstance(playlist,str) or not re.fullmatch(r'[A-Za-z0-9_-]{10,100}',playlist)):
+        raise PublishError('YouTube 合集 ID 无效')
+    if position is not None and (playlist is None or type(position) is not int or position < 0):
+        raise PublishError('YouTube 合集位置无效')
+    cover_id=pack.get('cover_asset_id'); cover=None
+    if cover_id is not None:
+        found=[a for a in assets if a.get('id')==cover_id and a.get('kind')=='image']
+        if len(found)!=1: raise PublishError('YouTube 封面引用不唯一')
+        item=found[0]
+        if (not isinstance(item.get('id'),str) or not item['id']
+                or not isinstance(item.get('absolute_path'),str) or not Path(item['absolute_path']).is_absolute()
+                or not isinstance(item.get('sha256'),str) or not re.fullmatch(r'[a-f0-9]{64}',item['sha256'])):
+            raise PublishError('YouTube 封面素材身份无效')
+        cover={k:item[k] for k in ('id','absolute_path','sha256')}
+    video=[a for a in assets if a.get('kind')=='video']
+    if len(video)!=1 or len(assets)!=(1+int(cover is not None)) or pack.get('subtitle_asset_ids'):
+        raise PublishError('YouTube 附加素材或字幕不可忽略')
+    return {'cover':cover,'playlist_id':playlist,'playlist_position':position}
+
+
+def make_plan(pack, *, bundle=False):
     if pack['platform'] != 'youtube' or pack['content_type'] != 'video' or pack['endpoint'] != 'publish':
         raise PublishError('YouTube API 候选仅支持公开视频发布')
     fields, meta = pack['fields'], pack['platform_metadata']
     if meta.get('visibility') != 'public': raise PublishError('当前候选只支持明确的 public 终点')
     allowed = {'visibility', 'made_for_kids', 'altered_content', 'category_id'}
+    if bundle:
+        components=extract_component_spec(pack)
+        if not components['cover'] and not components['playlist_id']:
+            raise PublishError('组合任务未指定封面或合集')
+        allowed |= {'playlist_id','playlist_position'}
     if set(meta) - allowed: raise PublishError('YouTube 字段尚无经过验收的映射，不能忽略')
     if not fields['title'] or (fields['text'] and fields['description'] and fields['text'] != fields['description']):
         raise PublishError('YouTube 标题缺失或正文与简介冲突')
-    if pack['cover_asset_id'] or pack['subtitle_asset_ids'] or len(pack['assets']) != 1:
-        raise PublishError('YouTube 封面、字幕或附加素材尚未由此候选支持')
-    video = pack['assets'][0]
+    if not bundle and (pack['cover_asset_id'] or pack['subtitle_asset_ids'] or len(pack['assets']) != 1):
+        raise PublishError('YouTube 封面、字幕或附加素材须使用组合任务，不可忽略')
+    video = next((a for a in pack['assets'] if a['kind']=='video'),None)
+    if video is None: raise PublishError('YouTube 缺视频素材')
     if video['kind'] != 'video': raise PublishError('YouTube 缺视频素材')
     if type(meta.get('made_for_kids')) is not bool:
         raise PublishError('YouTube 受众必须明确')
@@ -178,16 +242,19 @@ def make_plan(pack):
     return video, {'snippet':snippet, 'status':status}
 
 
-def preflight_youtube(manifest, target, profile, argv, expected_action=None):
+def preflight_youtube(manifest, target, profile, argv, expected_action=None, *, bundle=False, recovery=False):
     """Local check before the core claims the remote-write window; no network."""
-    channel, _ = config(profile, target, resolve_token=False)
+    if type(recovery) is not bool or (recovery and expected_action != 'verify'):
+        raise PublishError('只读恢复预检仅允许明确的 verify 动作')
+    writing = not recovery and expected_action != 'verify_component'
+    channel, _ = config(profile, target, writing=writing, resolve_token=False)
     positions = [i for i, item in enumerate(argv) if Path(item).name == 'youtube_adapter.py']
     if len(positions) != 1 or Path(argv[positions[0]]).resolve() != Path(__file__).resolve():
         raise PublishError('YouTube 适配器脚本必须是已安装的本包入口')
     i = positions[0]
     if i != 1 or not re.fullmatch(r'python(?:3(?:\.\d+)?)?', Path(argv[0]).name):
         raise PublishError('YouTube 适配器必须由明确的 Python 解释器直接运行')
-    if i + 1 >= len(argv) or argv[i+1] not in {'execute','verify','continue'}:
+    if i + 1 >= len(argv) or argv[i+1] not in {'execute','verify','continue','component','verify_component'}:
         raise PublishError('YouTube 适配器缺少明确动作')
     if expected_action is not None and argv[i+1] != expected_action:
         raise PublishError('YouTube 适配器动作与调度阶段不一致')
@@ -197,11 +264,16 @@ def preflight_youtube(manifest, target, profile, argv, expected_action=None):
     if argv[i+1:] != allowed_tail:
         raise PublishError('YouTube 适配器参数无效')
     selected = load_profile(argv[argv.index('--profile')+1])
-    selected_channel, _ = config(selected, target, resolve_token=False)
+    selected_channel, _ = config(selected, target, writing=writing, resolve_token=False)
     if selected_channel != channel or selected['accounts'][target['account']] != profile['accounts'][target['account']]:
         raise PublishError('YouTube 适配器配置与调度器账号不一致')
-    video, _ = make_plan(build_pack(manifest, target['id'], profile))
-    check_video(video)
+    if argv[i+1] not in {'component', 'verify_component'}:
+        pack=build_pack(manifest, target['id'], profile, check_files=not recovery)
+        video, _ = make_plan(pack,bundle=bundle)
+        if not recovery: check_video(video)
+        if bundle and not recovery:
+            cover=extract_component_spec(pack)['cover']
+            if cover: _cover_bytes(cover)
     return {'local_only':True, 'argv_validated':True}
 
 
@@ -306,14 +378,162 @@ def transfer(client, cp, path, size, offset, checkpoint):
     raise PublishError('YouTube 未返回完成回执；先查询')
 
 
+def _component_binding(request, channel):
+    component = request.get('component_job')
+    fields = {'component_key','original_job_key','video_id','channel','cover','playlist_id',
+              'playlist_position','component_digest','part'}
+    if not isinstance(component, dict) or set(component) != fields:
+        raise PublishError('YouTube 组件任务无效')
+    binding = {k:component[k] for k in ('original_job_key','video_id','channel','cover','playlist_id','playlist_position')}
+    key, video_id = digest(binding), component['video_id']
+    if (component['component_key'] != key or component['component_digest'] != key
+            or not isinstance(video_id,str) or not VIDEO_ID.fullmatch(video_id)
+            or component['channel'] != channel or component['part'] not in {'cover','playlist'}
+            or request.get('job',{}).get('key') != component['original_job_key']
+            or request.get('job',{}).get('remote_id') != video_id):
+        raise PublishError('YouTube 组件和原视频绑定不符')
+    cover, playlist, pos = component['cover'], component['playlist_id'], component['playlist_position']
+    if cover is not None and (not isinstance(cover,dict) or set(cover) != {'id','absolute_path','sha256'}
+            or not isinstance(cover['id'],str) or not cover['id']
+            or not isinstance(cover['absolute_path'],str) or not Path(cover['absolute_path']).is_absolute()
+            or not isinstance(cover['sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',cover['sha256'])):
+        raise PublishError('封面绑定无效')
+    if playlist is not None and (not isinstance(playlist,str) or not re.fullmatch(r'[A-Za-z0-9_-]{10,100}',playlist)):
+        raise PublishError('合集绑定无效')
+    if pos is not None and (playlist is None or type(pos) is not int or pos < 0):
+        raise PublishError('合集位置无效')
+    if (component['part'] == 'cover' and cover is None) or (component['part'] == 'playlist' and playlist is None):
+        raise PublishError('未指定组件')
+    return component
+
+
+def _cover_bytes(cover):
+    path = Path(cover['absolute_path'])
+    if path.is_symlink(): raise PublishError('封面不能是符号链接')
+    try:
+        with path.open('rb') as stream: data = stream.read(50*1024*1024+1)
+    except OSError:
+        raise PublishError('封面不可读') from None
+    if not data or len(data)>50*1024*1024 or hashlib.sha256(data).hexdigest()!=cover['sha256']:
+        raise PublishError('封面与已授权摘要不符')
+    if data.startswith(b'\x89PNG\r\n\x1a\n'): return data,'image/png'
+    if data.startswith(b'\xff\xd8\xff'): return data,'image/jpeg'
+    raise PublishError('封面必须为 PNG 或 JPEG')
+
+
+def _component_video(client, video_id, channel):
+    q = urllib.parse.urlencode({'part':'snippet','id':video_id})
+    code, _, raw = client.call('GET', API+'/youtube/v3/videos?'+q)
+    items = json_body(raw).get('items') if code == 200 else None
+    if (not isinstance(items,list) or len(items)!=1 or items[0].get('id')!=video_id
+            or items[0].get('snippet',{}).get('channelId')!=channel):
+        raise PublishError('YouTube 视频和频道身份未核实')
+    return items[0]['snippet']
+
+
+def _playlist_matches(client, playlist_id, video_id, channel, position):
+    q=urllib.parse.urlencode({'part':'snippet','id':playlist_id})
+    code,_,raw=client.call('GET',API+'/youtube/v3/playlists?'+q)
+    items=json_body(raw).get('items') if code==200 else None
+    if (not isinstance(items,list) or len(items)!=1 or items[0].get('id')!=playlist_id
+            or items[0].get('snippet',{}).get('channelId')!=channel):
+        raise PublishError('合集不属于目标频道或不可读')
+    params={'part':'snippet','playlistId':playlist_id,'videoId':video_id,'maxResults':50}
+    seen=set(); matches=[]
+    while True:
+        code,_,raw=client.call('GET',API+'/youtube/v3/playlistItems?'+urllib.parse.urlencode(params))
+        body=json_body(raw) if code==200 else {}; items=body.get('items')
+        if not isinstance(items,list): raise PublishError('合集读回不完整')
+        for item in items:
+            sn=item.get('snippet',{}) if isinstance(item,dict) else {}
+            if (sn.get('playlistId')!=playlist_id or sn.get('resourceId',{}).get('videoId')!=video_id
+                    or not isinstance(item.get('id'),str) or not item['id']
+                    or (position is not None and sn.get('position')!=position)):
+                raise PublishError('合集作品身份或位置不匹配')
+            matches.append(item['id'])
+        page=body.get('nextPageToken')
+        if not page: break
+        if not isinstance(page,str) or page in seen or len(seen)>=100: raise PublishError('合集分页无效')
+        seen.add(page); params['pageToken']=page
+    if len(matches)>1: raise PublishError('合集存在重复作品')
+    return matches
+
+
+def dispatch_component(request_path, action, profile, client_factory=APIClient):
+    request=read_json(request_path); manifest=read_json(request['manifest_path'])
+    if digest(manifest)!=request.get('manifest_digest'): raise PublishError('原任务快照已变化')
+    target=next((x for x in manifest.get('targets',[]) if x.get('id')==request.get('target',{}).get('id')),None)
+    if not target or target!=request['target']: raise PublishError('原目标已变化')
+    channel,token=config(profile,target,writing=action=='component')
+    part=_component_binding(request,channel); client=client_factory(token); identity(client,channel)
+    video_id=part['video_id']; snippet=_component_video(client,video_id,channel)
+    result={k:part[k] for k in ('component_key','original_job_key','video_id','part')}
+    if part['part']=='playlist':
+        playlist=part['playlist_id']; position=part['playlist_position']
+        matches=_playlist_matches(client,playlist,video_id,channel,position)
+        if action=='verify_component':
+            result['state']='verified' if len(matches)==1 else 'unknown'
+            return result
+        if matches:
+            result['state']='accepted'; return result
+        try: scopes=client.granted_scopes()
+        except PublishError: scopes=set()
+        if not scopes.intersection({'https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.force-ssl','https://www.googleapis.com/auth/youtubepartner'}):
+            result.update(state='needs_authorization',no_write=True,reason='scope_unconfirmed'); return result
+        sn={'playlistId':playlist,'resourceId':{'kind':'youtube#video','videoId':video_id}}
+        if position is not None: sn['position']=position
+        code,_,raw=client.call('POST',API+'/youtube/v3/playlistItems?part=snippet',
+            headers={'Content-Type':'application/json; charset=UTF-8'},data=json.dumps({'snippet':sn}).encode())
+        body=json_body(raw) if code in (200,201) else {}; got=body.get('snippet',{})
+        if (not isinstance(body.get('id'),str) or not body['id'] or got.get('playlistId')!=playlist
+                or got.get('resourceId',{}).get('videoId')!=video_id):
+            raise PublishError('合集请求结果未知')
+        result['state']='accepted'; return result
+    cover=part['cover']
+    if action=='component':
+        data,mime=_cover_bytes(cover)
+        q=urllib.parse.urlencode({'videoId':video_id,'uploadType':'media'})
+        code,_,raw=client.call('POST',API+'/upload/youtube/v3/thumbnails/set?'+q,
+            headers={'Content-Type':mime,'Content-Length':str(len(data))},data=data)
+        body=json_body(raw) if code in (200,201) else {}
+        if not isinstance(body.get('items'),list) or len(body['items'])!=1:
+            raise PublishError('封面请求结果未知')
+        result['state']='accepted'; return result
+    thumbnails=snippet.get('thumbnails',{})
+    url=next((thumbnails[k].get('url') for k in ('maxres','standard','high','medium','default')
+              if isinstance(thumbnails.get(k),dict) and thumbnails[k].get('url')),None) if isinstance(thumbnails,dict) else None
+    if not url: result['state']='unknown'; return result
+    image=client.thumbnail(url,video_id)
+    if not isinstance(image,bytes) or not image or len(image)>16*1024*1024:
+        result['state']='unknown'; return result
+    if not (image.startswith(b'\xff\xd8\xff') or (image.startswith(b'RIFF') and image[8:12]==b'WEBP')):
+        result['state']='unknown'; return result
+    sha=hashlib.sha256(image).hexdigest()
+    path=Path(str(request_path)+'.thumbnail-'+sha)
+    try:
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
+        with os.fdopen(fd,'wb') as out: out.write(image); out.flush(); os.fsync(out.fileno())
+    except FileExistsError:
+        if (path.is_symlink() or not path.is_file() or path.stat().st_uid!=os.getuid()
+                or path.stat().st_mode & 0o077 or file_hash(path)!=sha):
+            raise PublishError('封面观察文件不可信')
+    result.update(state='needs_visual_review',thumbnail_url=url,thumbnail_path=str(path.resolve()),
+                  thumbnail_sha256=sha,cover_sha256=cover['sha256'])
+    return result
+
+
 def dispatch(request_path, action, profile, client_factory=APIClient):
+    if action in {'component','verify_component'}:
+        return dispatch_component(request_path,action,profile,client_factory)
     request = read_json(request_path); manifest = read_json(request['manifest_path'])
     if digest(manifest) != request['manifest_digest']: raise PublishError('YouTube 封存快照变化')
     target = next((x for x in manifest.get('targets', []) if x['id'] == request['target']['id']), None)
     if target != request['target']: raise PublishError('YouTube 目标与封存快照不符')
     channel, token = config(profile, target, writing=action != 'verify')
     pack = build_pack(manifest, target['id'], profile, check_files=action != 'verify')
-    video, resource = make_plan(pack)
+    bundle=request.get('youtube_bundle',False)
+    if type(bundle) is not bool: raise PublishError('YouTube 组合任务标记无效')
+    video, resource = make_plan(pack,bundle=bundle)
     binding = {'manifest_digest':digest(manifest), 'target_id':target['id'],
                'account':target['account'], 'channel':channel, 'asset_sha256':video['sha256'],
                'resource_digest':digest(resource)}
@@ -381,14 +601,18 @@ def dispatch(request_path, action, profile, client_factory=APIClient):
             or thumbnail.scheme != 'https' or thumbnail.hostname != 'i.ytimg.com'
             or len(path_parts) < 3 or path_parts[0] not in {'vi','vi_webp'} or path_parts[1] != video_id):
         return observation
-    observation.update(state='published',content_verified=True,verified_pack_digest=digest(pack),
-                       verified_asset_ids=[video['id']])
+    if bundle:
+        observation.update(state='pending',video_only_verified=True,stage='youtube_components_pending',
+                           verified_pack_digest=digest(pack),verified_asset_ids=[video['id']])
+    else:
+        observation.update(state='published',content_verified=True,verified_pack_digest=digest(pack),
+                           verified_asset_ids=[video['id']])
     return observation
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('execute','verify','continue'))
+    parser.add_argument('action',choices=('execute','verify','continue','component','verify_component'))
     parser.add_argument('--request',required=True); parser.add_argument('--profile',required=True)
     args=parser.parse_args()
     try:

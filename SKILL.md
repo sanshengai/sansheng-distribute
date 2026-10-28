@@ -31,13 +31,15 @@ X 单 MP4 已完成真实系列发送与独立读回，微博单视频已完成�
 
 - `seal` 锁定生产端已选文件和位置；不决定媒体插哪里，也不代表审核/发送授权。
 - `check` 核对文件、哈希、媒体位置、平台目标。
+- `media-inspect <manifest> --target <目标>` 使用本机可选的 ffprobe 只读检查封存视频的实际宽高、旋转、时长和大小；不转换素材、不连接平台，也不证明符合平台规则。缺少 ffprobe 时会明确提示。
 - `preflight` 在联网写入前核对可执行程序、适配器脚本，以及公众号的 HTML、封面、内置或显式旧 API 模块和账号凭证绑定；不请求 token、不上传。`run` 自动执行此检查。
 - `pack` 输出平台专用发布包，保留标题、正文、话题、链接、封面和字幕；规格不符交回修改，不静默截断。
 - `batch-prepare / batch-authorize / batch-run / batch-resume / batch-status` 逐目标记账；失败继续其他账号目标，结果未知只查询，已完成不重发。批量准备不等于批量授权。
 - `prepare` 建立本地任务；`authorize` 记录已有实际用户授权，绑定版本和目标，不编造批准或重复询问。
 - `run` 调用执行器，立即记录远端身份，再调用独立读回器。
 - `resume` 只查询已开始任务，不重复提交；`status` 查看真实状态。
-- `continue-youtube <key>` 在原授权与账号锁内继续同一 YouTube 上传会话，会写入平台；区别于只读 `resume`。本包 [YouTube 官方 API 候选](references/youtube-api.md)默认关闭且未经真实账号验收，暂只支持单个公开视频素材，封面、合集、字幕不在候选范围。
+- `continue-youtube <key>` 在原授权与账号锁内继续同一 YouTube 上传会话，会写入平台；区别于只读 `resume`。[YouTube 官方 API](references/youtube-api.md)默认关闭，单账号公开视频上传已有真实验收；其他账号和分项能力按各自证据判断。
+- `youtube-bundle-*` 为新 YouTube 视频、封面和合集建立分项组合任务；`youtube-component-*` 可接力已核验的视频，封面视觉复核单独留证。命令、授权及实测范围见 [YouTube 官方 API](references/youtube-api.md)；未知结果只读核查，不重传视频。
 - `metrics --key <任务key>` 查询同一账本的执行/核验计量，不操作平台；复盘效率时按需读 [耗时计量](references/metrics.md)。缺样本不当作零耗时。
 - `recover-wechat / recover-x / recover-weibo` 对无 ID 的未知提交，用明确候选 ID 经对应平台独立读回后绑定同一任务；不新建、不重发。公众号核对官方草稿，X/微博视频另核对原上传媒体及来源。候选不明或核对失败继续保持未知，见恢复流程。
 - `advance` 仅在公众号草稿已读回、明确待补媒体、补完整网址或视觉检查时继续同一稿，复用当前版本授权；不与只读恢复混用。
