@@ -32,7 +32,7 @@ python3 '<skill-root>/setup.py' --init \
 
 AppSecret 只放环境变量或私有 env 文件，不传命令行参数、不存 profile。微信读取 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`；指定 env 文件优先于进程环境变量。profile 仅存确认账号的 AppID SHA-256 指纹。新 profile 使用文件权限 `0600`，初始化后回读核对；已有文件一律拒绝覆盖，也不复制或迁移账本。
 
-`--platform` 可重复指定 `wechat`、`x`、`weibo`、`xiaohongshu`、`douyin`、`bilibili`、`tencent_video`、`wechat_channels`、`youtube`、`alipay`。选择只登记 `configured_modules`，用于本地配置与诊断；所有 `enabled_capabilities` 仍为空，`acceptance_runs` 也为空。它不是发布授权，也不把未验收的平台变成可用能力。YouTube 和支付宝仅有本地视频交接与 Agent 工作单，尚无已验收的自动上传器。真实草稿/预填试验仍遵守[验收方法](acceptance.md)。
+`--platform` 可重复指定 `wechat`、`x`、`weibo`、`xiaohongshu`、`douyin`、`bilibili`、`tencent_video`、`wechat_channels`、`youtube`、`alipay`。选择只登记 `configured_modules`，用于本地配置与诊断；所有 `enabled_capabilities` 仍为空，`acceptance_runs` 也为空。它不是发布授权，也不把未验收的平台变成可用能力。YouTube 和支付宝均可本地交接；YouTube 另有默认关闭的官方 API 候选，但两平台均尚无已验收的自动上传器。真实草稿/预填试验仍遵守[验收方法](acceptance.md)。
 
 社交模块还需要专用浏览器目录与已确认的公开账号身份。例如首次配置 X：
 

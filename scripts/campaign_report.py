@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from campaign import _load, campaign_status
+from component_results import FIELDS, RESULTS, component_snapshot
 from publish_core import PublishError
 
 LABELS = {
@@ -97,15 +98,32 @@ def render_report(campaign_id, store):
         if target.get('cover_asset_id'):
             info.append('封面素材：' + str(target['cover_asset_id']))
         details = '；'.join(info) or '未提供'
+        # These are attributed manual observations, not platform verification.
+        observations = component_snapshot(store, row)
+        components = []
+        for key, name in FIELDS.items():
+            observed = observations.get(key)
+            if observed:
+                text = (f'{name}：{RESULTS[observed["result"]]}（人工记录，'
+                        f'{display_time(observed["observed_at"])}；{observed["evidence"]}）')
+            else:
+                text = f'{name}：未核验'
+            components.append(esc(text))
+        component_html = '<ul class="components">' + ''.join('<li>' + text + '</li>' for text in components) + '</ul>'
         desc = target.get('description') or target.get('text') or '未提供'
         notice = row.get('error') or row.get('reason') or row.get('message') or row.get('author_action') or ''
         action = row.get('author_action') or ACTION_LABELS.get(row.get('next_action'), row.get('next_action')) or '暂无'
+        if any(o['result'] == 'mismatch' for o in observations.values()):
+            action += '；分项不一致，请处理并复核原作品'
+        elif any(o['result'] == 'unknown' for o in observations.values()):
+            action += '；分项未确认，请核对原作品'
         rows.append(f'''<article class="item"><div class="platform">{esc(platform)}
           <span class="account">{esc(row['account'])}</span></div><div class="body"><div class="top"><h2>{esc(title)}</h2>
           <span class="status {tone}">{esc(label)}</span></div><p class="detail">{esc(desc)}</p>
           <dl><div><dt>目标</dt><dd>{esc(row['endpoint'])}</dd></div><div><dt>下一步</dt><dd>{esc(action)}</dd></div>
           <div><dt>原始提示</dt><dd>{esc(notice or '暂无')}</dd></div><div><dt>话题（计划）</dt><dd>{esc(tag_text or '未提供')}</dd></div>
           <div><dt>封面和声明（计划）</dt><dd>{esc(details)}</dd></div></dl>
+          <div class="checks"><strong>分项结果（人工观察）</strong>{component_html}</div>
           <div class="foot"><span>账本更新时间：{esc(display_time(row.get('updated_at')))}</span>{remote_link(row.get('remote_url'))}</div>
           </div></article>''')
     stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M %z')
@@ -121,11 +139,12 @@ header p{{color:var(--soft);margin:4px 0}}h1{{font-size:clamp(30px,5vw,48px);let
 .body{{padding:22px 26px}}.top{{display:flex;gap:16px;align-items:start;justify-content:space-between}}h2{{font-size:19px;line-height:1.4;margin:0;overflow-wrap:anywhere}}
 .status{{white-space:nowrap;border-radius:4px;padding:4px 9px;font-size:13px;font-weight:700;background:#e7eef1;color:#36515b}}.ok{{background:#d9f1e4;color:#186443}}.bad{{background:#fce7e2;color:#a3372c}}.warn{{background:#fff0cf;color:#795000}}
 .detail{{white-space:pre-wrap;overflow-wrap:anywhere;color:#455e61}}dl{{display:grid;grid-template-columns:1fr 1fr;gap:10px 24px;margin:22px 0}}dl div{{min-width:0}}dt{{color:var(--soft);font-size:13px}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}
+.checks{{border-top:1px solid var(--line);padding:12px 0;color:#455e61;font-size:14px}}.components{{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;overflow-wrap:anywhere}}
 .foot{{border-top:1px solid var(--line);padding-top:12px;display:flex;justify-content:space-between;gap:15px;color:var(--soft);font-size:13px}}a{{color:var(--blue)}}a:focus-visible{{outline:3px solid #397d86;outline-offset:4px}}
-@media(max-width:680px){{main{{padding:28px 16px}}.item{{grid-template-columns:1fr}}.platform{{padding:12px 18px}}.account{{display:inline;margin-left:10px}}.body{{padding:18px}}.top{{flex-direction:column}}dl{{grid-template-columns:1fr}}.foot{{flex-direction:column}}}}
+@media(max-width:680px){{main{{padding:28px 16px}}.item{{grid-template-columns:1fr}}.platform{{padding:12px 18px}}.account{{display:inline;margin-left:10px}}.body{{padding:18px}}.top{{flex-direction:column}}dl{{grid-template-columns:1fr}}.components{{grid-template-columns:1fr}}.foot{{flex-direction:column}}}}
 </style></head><body><main><header><p>分发任务 · 本地结果</p><h1>这次发布，进展如何？</h1>
 <p class="summary">共 {len(rows)} 个目标</p><p>生成于 {esc(stamp)}。这是本地账本的上次记录，并非实时刷新；草稿、预填与已公开分别显示。旧任务的待执行状态不能证明平台没有其他作品。</p>
-<p>封面、话题和声明为交接时的计划，不代表平台已确认。此页面可能含私有内容，请妥善保存。</p><ul class="overview">{overview}</ul></header>{''.join(rows)}</main></body></html>'''
+<p>封面、话题和声明的计划不代表平台已确认；分项结果为所记录的人工观察，不是本报告实时核验。此页面可能含私有内容，请妥善保存。</p><ul class="overview">{overview}</ul></header>{''.join(rows)}</main></body></html>'''
 
 
 def write_report(campaign_id, store, output):

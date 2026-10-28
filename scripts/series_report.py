@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from campaign import _load, campaign_status
 from campaign_report import PLATFORMS
+from component_results import FIELDS, RESULTS, component_snapshot
 from publish_core import HEX, PublishError, digest, read_json, target_of
 
 
@@ -203,6 +204,14 @@ def render_series_report(spec, store):
             external = row is not None and row.get('external', False)
             source = f'人工核验 {row["observed_at"]}：{row["evidence"]}' if external else '本地账本' if row is not None else '无记录'
             source_marker = '<span class="source">人工</span>' if external else ''
+            # Keep the series matrix compact: show only a warning if a manual
+            # field observation explicitly found a mismatch or remains unknown.
+            observations = component_snapshot(store, row) if row else {}
+            warnings = [f'{FIELDS[key]}{RESULTS[obs["result"]]}' for key, obs in observations.items()
+                        if obs['result'] in {'mismatch', 'unknown'}]
+            if warnings:
+                source += '；人工分项：' + '、'.join(warnings)
+                source_marker += '<span class="source">分项待查</span>'
             row_cells.append(f'<td aria-label="第 {ep} 集：{esc(label)}，{esc(source)}" title="{esc(source)}">'
                              f'<span class="status {tone}">{esc(label)}</span>{source_marker}</td>')
         platform, account = pair

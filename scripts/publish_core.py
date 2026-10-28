@@ -331,6 +331,9 @@ class Store:
           CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY, job_key TEXT NOT NULL, state TEXT NOT NULL,
             data TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS pacing_windows (
+            platform TEXT NOT NULL, scope TEXT NOT NULL, identity TEXT NOT NULL,
+            next_at REAL NOT NULL, PRIMARY KEY(platform, scope, identity));
           CREATE TABLE IF NOT EXISTS timings (
             id INTEGER PRIMARY KEY, job_key TEXT NOT NULL,
             phase TEXT NOT NULL CHECK(phase IN ('preflight','execute','continue','verify')),
@@ -438,7 +441,7 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO grants VALUES (?,?,?)", (digest([job["key"], digest(manifest)]), statement, now()))
         return {"key": job["key"], "authorized_endpoint": job["endpoint"]}
 
-    def begin(self, manifest, ident, *, continuing=False):
+    def begin(self, manifest, ident, *, continuing=False, profile=None):
         validate(manifest)
         target = target_of(manifest, ident)
         if target.get('existing_draft') and not continuing:
@@ -458,9 +461,41 @@ class Store:
                 self.db.execute("INSERT INTO account_locks VALUES (?,?,?)", (job["platform"], job["account"], key))
             except sqlite3.IntegrityError as exc:
                 raise PublishError("该账号已有执行/结果未知任务，须先读回核实") from exc
+            from rate_policy import apply_pacing
+            apply_pacing(self.db, profile, target)
             self.db.execute("UPDATE jobs SET state='submission_unknown',updated_at=? WHERE key=?", (now(), key))
             self.db.execute("INSERT INTO events(job_key,state,data,created_at) VALUES (?,?,?,?)",
                             (key, "submission_unknown", "{}", now()))
+        return self.status(key)
+
+    def begin_youtube_continue(self, manifest, ident, *, profile=None):
+        """Resume only the same uncertain upload under its original grant and lock."""
+        validate(manifest)
+        target = target_of(manifest, ident)
+        if target['platform'] != 'youtube' or target['endpoint'] != 'publish':
+            raise PublishError('只允许继续原 YouTube 视频投稿会话')
+        key = self.key(manifest, target)
+        with self.tx():
+            job = self.status(key)
+            if job['manifest_digest'] != digest(manifest):
+                raise PublishError('原任务快照不一致')
+            if any(job[field] != target[field] for field in ('platform','account','endpoint')) or job['target_id'] != ident:
+                raise PublishError('原任务账本身份与封存目标不一致')
+            if not self.db.execute('SELECT 1 FROM grants WHERE key=?', (digest([key, digest(manifest)]),)).fetchone():
+                raise PublishError('缺少原任务授权')
+            if job['state'] not in {'submission_unknown', 'pending'}:
+                raise PublishError('原任务不在可继续的状态')
+            lock = self.db.execute('SELECT job_key FROM account_locks WHERE platform=? AND account=?',
+                                   (job['platform'], job['account'])).fetchone()
+            if lock and lock['job_key'] != key:
+                raise PublishError('该账号被其他任务占用')
+            if not lock:
+                self.db.execute('INSERT INTO account_locks VALUES (?,?,?)', (job['platform'],job['account'],key))
+            from rate_policy import apply_pacing
+            apply_pacing(self.db, profile, target)
+            self.db.execute("UPDATE jobs SET state='submission_unknown',updated_at=? WHERE key=?", (now(), key))
+            self.db.execute('INSERT INTO events(job_key,state,data,created_at) VALUES (?,?,?,?)',
+                            (key, 'youtube_continue_started', '{}', now()))
         return self.status(key)
 
     def bind_existing(self, manifest, ident):
@@ -540,7 +575,7 @@ class Store:
 
 def _first_publication_trial(profile, target, manifest):
     """One expiring social publication trial; ordinary authorization still applies."""
-    if manifest is None or target['endpoint'] != 'publish' or target['platform'] not in {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels'}:
+    if manifest is None or target['endpoint'] != 'publish' or target['platform'] not in {'x', 'weibo', 'douyin', 'bilibili', 'tencent_video', 'wechat_channels', 'youtube', 'alipay'}:
         return False
     expected = {'manifest_digest': digest(manifest), 'target_id': target['id'],
                 'platform': target['platform'], 'account': target['account'],
@@ -592,6 +627,8 @@ def preflight(manifest, ident, profile):
     report = validate(manifest)
     target = target_of(manifest, ident)
     config = adapter_config(profile, target, manifest=manifest)
+    from rate_policy import parse_pacing
+    parse_pacing(profile, target)
     if target['platform'] != 'wechat':
         from platform_pack import build_pack
         build_pack(manifest, ident, profile)
@@ -607,6 +644,9 @@ def preflight(manifest, ident, profile):
         if any(Path(a).name == 'wechat_adapter.py' for a in argv):
             from wechat_adapter import preflight_wechat
             preflight_wechat(manifest, target, profile, argv)
+        if any(Path(a).name == 'youtube_adapter.py' for a in argv):
+            from youtube_adapter import preflight_youtube
+            preflight_youtube(manifest, target, profile, argv, expected_action=action)
         if any(Path(a).name == 'bilibili_adapter.py' for a in argv):
             from bilibili_adapter import preflight_bilibili
             preflight_bilibili(manifest, target, profile, argv)
@@ -669,7 +709,7 @@ def invoke(config, action, request_path, *, lock_fd):
     return value
 
 
-def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat"):
+def run(manifest_path, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", youtube_continue=False):
     # A live executor must not be reclassified by a concurrent "not found" query.
     # A foreground child inherits the lock even if its parent dies.
     manifest = read_json(manifest_path)
@@ -686,10 +726,10 @@ def run(manifest_path, ident, profile, store, *, resume=False, advance=False, ad
             raise PublishError("该账号执行器仍在运行，不能并发提交或读回重置") from exc
         # Close our reference without LOCK_UN: an orphan child may still own it.
         return _run_locked(manifest, ident, profile, store, resume=resume, advance=advance, adopt=adopt,
-                           recover_remote_id=recover_remote_id, recovery_platform=recovery_platform, lock_fd=stream.fileno())
+                           recover_remote_id=recover_remote_id, recovery_platform=recovery_platform, lock_fd=stream.fileno(), youtube_continue=youtube_continue)
 
 
-def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", lock_fd):
+def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False, adopt=False, recover_remote_id=None, recovery_platform="wechat", lock_fd, youtube_continue=False):
     if not resume:
         validate(manifest)
     target = target_of(manifest, ident)
@@ -717,7 +757,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if digest(manifest) != job["manifest_digest"]:
             raise PublishError("恢复快照与账本不一致")
         target = target_of(manifest, ident)
-    config = adapter_config(profile, target, readonly=resume or adopt, manifest=manifest)
+    config = adapter_config(profile, target, readonly=(resume or adopt) and not youtube_continue, manifest=manifest)
     if adopt:
         job = store.bind_existing(manifest, ident)
         resume = True
@@ -728,8 +768,32 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
     if recover_remote_id is not None:
         request['recovery_remote_id'] = recover_remote_id
         request['recovery_platform'] = recovery_platform
+    if youtube_continue:
+        if not resume or advance or adopt or recover_remote_id is not None or target['platform'] != 'youtube':
+            raise PublishError('YouTube 续传只允许原任务使用')
+        command = config.get('continue')
+        if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
+            raise PublishError('未配置 YouTube 原会话续传适配器')
+        if not any(Path(x).name == 'youtube_adapter.py' for x in command):
+            raise PublishError('YouTube 续传仅允许受控的原会话适配器')
+        with store.measure(key, 'preflight'):
+            preflight(manifest, ident, profile)
+            from youtube_adapter import preflight_youtube
+            preflight_youtube(manifest, target, profile, command, expected_action='continue')
+        write_json(request_path, request)
+        store.begin_youtube_continue(manifest, ident, profile=profile)
+        with store.measure(key, 'continue'):
+            response = invoke(config, 'continue', request_path, lock_fd=lock_fd)
+            if not response.get('remote_id'):
+                raise PublishError('YouTube 续传未返回作品 ID；保持结果未知')
+            store.save_observation(key, dict(response, state='pending'), verified=False)
+        request['job'] = store.status(key)
+        write_json(request_path, request)
+        with store.measure(key, 'verify'):
+            observation = invoke(config, 'verify', request_path, lock_fd=lock_fd)
+            return store.save_observation(key, observation, verified=True)
     if advance:
-        if target['platform']!='wechat' or target['endpoint']!='draft':
+        if target['platform']!='wechat'  or target['endpoint']!='draft':
             raise PublishError('advance 当前只允许公众号已建草稿补原生媒体')
         command=config.get('continue')
         if not isinstance(command,list) or not command or not all(isinstance(x,str) for x in command):
@@ -742,7 +806,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         if observation.get('state')!='pending' or observation.get('stage') not in {'native_media_insertion_required','visual_review_required','external_link_repair_required'}:
             raise PublishError('当前草稿不在可补媒体阶段；先核对差异')
         request['job']=store.status(key); request['continuation']=observation; write_json(request_path,request)
-        store.begin(manifest,ident,continuing=True)
+        store.begin(manifest,ident,continuing=True,profile=profile)
         with store.measure(key,'continue'):
             response=invoke(config,'continue',request_path,lock_fd=lock_fd)
             store.save_observation(key,dict(response,state='pending'),verified=False)
@@ -756,7 +820,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
                 preflight(manifest, ident, profile)
         # Prepare all fallible local writes before claiming the remote mutation window.
         write_json(request_path, request)
-        store.begin(manifest, ident)
+        store.begin(manifest, ident, profile=profile)
         with store.measure(key,'execute'):
             response = invoke(config, "execute", request_path, lock_fd=lock_fd)
             if response.get("remote_id"):

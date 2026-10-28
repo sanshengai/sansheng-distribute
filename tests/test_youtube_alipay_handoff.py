@@ -61,7 +61,7 @@ class VideoHandoffTests(unittest.TestCase):
                 pack = json.loads(output.read_text(encoding='utf-8'))
                 self.assertEqual(pack['platform_metadata'], manifest['targets'][0]['platform_metadata'])
                 self.assertEqual(pack['cover_asset_id'], 'cover')
-                self.assertIn('仅提供本地交接', ' '.join(pack['warnings']))
+                self.assertIn('真实账号验收', ' '.join(pack['warnings']))
                 result = self.cli('--profile', profile, 'preflight', sealed, '--target', 'item')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('尚未启用/验收', result.stdout)

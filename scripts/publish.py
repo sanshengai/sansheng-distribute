@@ -22,6 +22,8 @@ def main():
     p.add_argument('--key', required=True)
     p = sub.add_parser("return-write", help="只读重验既有草稿并生成 Write 回传凭证；不上传或新建")
     p.add_argument("key"); p.add_argument("--article-dir", required=True); p.add_argument("--write-scripts", required=True)
+    p = sub.add_parser("continue-youtube", help="按原授权继续 YouTube 原上传会话；会写入平台，不创建新会话")
+    p.add_argument("key")
     p = sub.add_parser("resume-job", help="源文件或交接清单丢失时，按账本 key 只读恢复")
     p.add_argument("key")
     for name in ('recover-wechat','recover-x','recover-weibo'):
@@ -109,6 +111,11 @@ def main():
                 result = run(store.directory / "snapshots" / f"{args.key}.json", job["target_id"], load_profile(args.profile), store,
                              resume=True, recover_remote_id=args.remote_id if args.action.startswith('recover-') else None,
                              recovery_platform=args.action.removeprefix('recover-') if args.action.startswith('recover-') else 'wechat')
+            elif args.action == "continue-youtube":
+                job = store.status(args.key)
+                path = store.directory / 'snapshots' / f"{job['key']}.json"
+                result = run(path, job['target_id'], load_profile(args.profile), store,
+                             resume=True, youtube_continue=True)
             elif args.action in {"run", "resume", "advance", "adopt"}:
                 result = run(args.manifest, args.target, load_profile(args.profile), store,
                              resume=args.action == "resume",advance=args.action == "advance",adopt=args.action == "adopt")

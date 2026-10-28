@@ -5,15 +5,22 @@
       "repository": "https://github.com/gitroomhq/postiz-app",
       "commit": "a5affe62c74e39c1e7ac960d50d8418b807d532c",
       "license": "AGPL-3.0",
-      "scope": ["integration.validation.tool.ts", "youtube.provider.ts", "youtube.settings.dto.ts"],
-      "adoption": "Source study only: queryable constraints and separate media/thumbnail outcomes; no upstream source copied, no API or resumable-upload implementation claimed."
+      "scope": [
+        "integration.validation.tool.ts",
+        "youtube.provider.ts",
+        "youtube.settings.dto.ts"
+      ],
+      "adoption": "Source study only: queryable constraints and separate media/thumbnail outcomes; no upstream source copied. A separately implemented official API resumable-upload candidate is disabled and has offline tests only."
     },
     {
       "repository": "https://github.com/inovector/mixpost",
       "commit": "df57648b866310446703f5294350552b62735df5",
       "license": "MIT",
-      "scope": ["src/Actions/AccountPublishPost.php", "src/Concerns/Job/HasSocialProviderJobRateLimit.php"],
-      "adoption": "Source study only: per-account outcome and separate account/provider limits; no upstream source copied, platform-wide limit scheduler not implemented."
+      "scope": [
+        "src/Actions/AccountPublishPost.php",
+        "src/Concerns/Job/HasSocialProviderJobRateLimit.php"
+      ],
+      "adoption": "Source study only: per-account outcome and separate account/provider limits; no upstream source copied. Optional local platform/account pacing uses user-configured intervals and is not platform-enforced quota detection."
     },
     {
       "repository": "https://github.com/JimLiu/baoyu-skills",

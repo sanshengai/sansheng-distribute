@@ -33,6 +33,18 @@ class FirstPublicationTests(unittest.TestCase):
             p['first_publication_runs'][0]['platform']=platform
             with self.subTest(platform=platform),self.assertRaises(PublishError):self.check(profile=p,target=t,manifest=m)
 
+    def test_new_platform_trials_bind_exact_target_without_global_enable(self):
+        for platform in ('youtube', 'alipay'):
+            with self.subTest(platform=platform):
+                t=dict(self.target,platform=platform); m=dict(targets=[t],assets=[])
+                p=copy.deepcopy(self.profile)
+                p['accounts']['editor']['platforms']=[platform]
+                p['adapters'][platform]=p['adapters']['douyin']
+                p['first_publication_runs'][0].update(platform=platform,manifest_digest=digest(m))
+                self.assertEqual(self.check(profile=p,target=t,manifest=m)['enabled_capabilities'],[])
+                p['first_publication_runs'][0]['manifest_digest']='0'*64
+                with self.assertRaises(PublishError): self.check(profile=p,target=t,manifest=m)
+
     def test_empty_and_missing_scope_refused(self):
         for entries in ([], [{}]):
             p=copy.deepcopy(self.profile);p['first_publication_runs']=entries
