@@ -102,7 +102,7 @@ def load_profile(path):
                     if not isinstance(cli[key], str) or not cli[key].strip():
                         raise EnvironmentError('CLI 路径须为非空字符串')
                     cli[key] = str(_path(cli[key], path.parent))
-        for action in ('execute', 'verify', 'continue'):
+        for action in ('execute', 'verify', 'continue', 'component', 'verify_component'):
             argv = adapter.get(action)
             if not isinstance(argv, list):
                 continue

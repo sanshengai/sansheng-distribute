@@ -106,6 +106,20 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(self.paths(profile=path)['state_dir'], str(self.home / 'original ledger'))
         self.assertEqual(path.read_bytes(), before)
 
+    def test_youtube_component_commands_resolve_skill_root_and_profile(self):
+        path = self.write(self.home / 'private/profile.json', {
+            'adapters': {'youtube': {action: ['python3', '${SKILL_ROOT}/scripts/youtube_adapter.py',
+                                              action, '--profile', 'profile.json']
+                                      for action in ('component', 'verify_component')}}})
+        before = path.read_bytes()
+        loaded = env.load_profile(path)
+        for action in ('component', 'verify_component'):
+            argv = loaded['adapters']['youtube'][action]
+            self.assertEqual(argv[1], str(ROOT / 'scripts/youtube_adapter.py'))
+            self.assertEqual(argv[2], action)
+            self.assertEqual(argv[4], str(path))
+        self.assertEqual(path.read_bytes(), before)
+
     def test_blank_initialization_is_private_silent_and_refuses_overwrite(self):
         path = self.home / 'private/profile.json'
         env.initialize(path, state_dir=self.home / 'ledger')
