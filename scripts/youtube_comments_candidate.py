@@ -319,7 +319,15 @@ def run_cli(argv=None, *, client_factory=APIClient):
     if (grant.get('account') != args.account or grant.get('intent_digest') != args.key
             or not isinstance(grant.get('user_statement'), str) or not grant['user_statement'].strip()):
         raise PublishError('缺少绑定该评论的实际用户授权')
-    return send(client, intent, approved_digest=args.key, state_dir=root, allow_write=True)
+    receipt = send(client, intent, approved_digest=args.key, state_dir=root, allow_write=True)
+    if receipt.get('state') == 'verified' and intent.get('parent_id'):
+        from interaction_receipts import record_reply
+        try:
+            projection = record_reply(root, args.account, intent, receipt)
+        except (PublishError, OSError):
+            projection = {'recorded': False, 'reason': 'inbox_projection_failed'}
+        return {**receipt, 'inbox': projection}
+    return receipt
 
 
 def main():

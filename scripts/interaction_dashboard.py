@@ -40,6 +40,8 @@ def render(db_path, include_text=False, requested=()):
         db.execute('BEGIN')
         sources = [dict(r) for r in db.execute('SELECT * FROM interaction_sources')]
         items = [dict(r) for r in db.execute('SELECT * FROM interaction_items')]
+        has_receipts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_reply_receipts'").fetchone()
+        replied = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,parent_id FROM interaction_reply_receipts')} if has_receipts else set()
         has_provenance = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_manual_provenance'").fetchone()
         manual = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,comment_id FROM interaction_manual_provenance')} if has_provenance else set()
     by_source = {}
@@ -54,9 +56,10 @@ def render(db_path, include_text=False, requested=()):
         seen_platforms.add(platform)
         key = (platform, src['account'], src['channel_id'])
         incoming = [x for x in by_source.get(key, []) if not x['is_own']]
-        pending = [x for x in incoming if x['local_status'] == 'new']
+        verified = [x for x in incoming if (*key, x['comment_id']) in replied]
+        pending = [x for x in incoming if x['local_status'] == 'new' and (*key, x['comment_id']) not in replied]
         handled = [x for x in incoming if x['local_status'] == 'handled']
-        unknown = len(incoming) - len(pending) - len(handled)
+        unknown = sum(x['local_status'] not in ('new', 'handled') for x in incoming)
         manual_count = sum((*key, x['comment_id']) in manual for x in incoming)
         if src['state'] == 'manual':
             coverage = '人工导入，未进行平台同步'
@@ -65,6 +68,7 @@ def render(db_path, include_text=False, requested=()):
         else:
             coverage = '覆盖范围以平台同步记录为准'
         note = coverage + (('；' + str(src['error'])) if src.get('error') and src['error'] != coverage else '')
+        note += f'；平台已核验回复 {len(verified)} 条（历史回执）'
         if manual_count:
             note += f'；含人工导入 {manual_count} 条'
         if unknown:
