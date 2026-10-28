@@ -1,6 +1,6 @@
 ---
 name: sansheng-distribute
-description: 将已有文章、图文和视频交接到指定社交平台，处理公众号媒体插入、草稿、发布、核验与续跑。用于发布与分发任务；文章创作、排版及视频制作仍由各自内容 Skill 负责。
+description: 将已有文章、图文和视频交接到指定社交平台，处理公众号媒体插入、草稿、发布、核验与续跑；也可按需处理 YouTube 评论。文章创作、排版及视频制作仍由各自内容 Skill 负责。
 metadata:
   version: "0.14.2"
 ---
@@ -14,6 +14,8 @@ metadata:
 读取私有 profile 的 `distribution_preferences` 后再选择路线与并行数；该字段是作者偏好，不能扩大 `accounts`、已验收能力或授权终点。未配置的平台不因偏好表中出现就自动登录或启用。
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
+
+查看或回复 YouTube 评论时按需读 [YouTube 评论候选](references/youtube-comments.md)。候选使用官方 API 并需单独授权；目前仅单账号自评论及自回复完成真实读回，其他平台和他人评论回复不能据此视为已验收。
 
 分发后在对话中按平台简述状态；系列多集优先按[批量分发](references/campaign.md)中的 `series-report` 生成精简看板，每个平台账号一行、每集一个状态格，并说明有证据的原因和建议。普通任务可用 `batch-report` 查看详细信息。明确区分账本快照、草稿、待作者操作和已核验公开；无记录不等于未发布，不创建假记录凑看板。
 
