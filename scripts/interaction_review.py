@@ -86,6 +86,13 @@ class ReviewDesk:
                     baseline = bool(db.execute('''SELECT 1 FROM interaction_baselines
                         WHERE platform=? AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone())
                 status_label = '已核验回复' if verified else '历史基线' if baseline else '已标记处理' if handled else None
+                web = None
+                if 'interaction_web_provenance' in tables:
+                    web = db.execute('''SELECT * FROM interaction_web_provenance
+                        WHERE platform=? AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone()
+                    if web and handled and web['own_reply_seen'] and not verified:
+                        status_label = '网页已有本人回复'
+                        reason = '已在原对话看到本人回复；不是本次发送或官方 API 回执'
                 if baseline and not verified:
                     reason = '历史留言仅作去重基线，不自动补回，也不代表已回复'
                 if eligible and draft and draft['source_digest'] != fingerprint:
@@ -115,11 +122,19 @@ class ReviewDesk:
                              'author_name': item['author_name'] or '网友', 'comment': item['body'] or '',
                              'reply': reply, 'source_digest': fingerprint,
                              'draft_key': draft['draft_key'] if draft else None,
+                             'source_kind': web['identity_kind'] if web else None,
+                             'work_title': web['work_title'] if web else None,
                              'eligible': eligible, 'reason': reason, 'sendable': sendable,
                              'route_reason': route_reason, 'suggestion': suggestion, 'context': context,
                              'published_at': item['published_at'], 'handled': handled, 'status_label': status_label})
             sources = [dict(r) for r in db.execute('''SELECT platform,account,state,last_success_at
                 FROM interaction_sources ORDER BY platform,account''')]
+            if 'interaction_web_provenance' in tables:
+                for src in sources:
+                    observed = db.execute('''SELECT MAX(observed_at) FROM interaction_web_provenance
+                        WHERE platform=? AND account=?''', (src['platform'], src['account'])).fetchone()[0]
+                    if observed:
+                        src.update(web_observed_at=observed)
             discovered = 0
             if 'weibo_official_items' in tables:
                 discovered = db.execute('''SELECT count(*) FROM weibo_official_items d
