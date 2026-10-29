@@ -74,6 +74,13 @@ def withdraw(root, key):
     root = _safe_state_dir(root)
     with _lock(root), open_db(root) as db:
         db.execute(SCHEMA)
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_dispatches'").fetchone():
+            bound = db.execute('SELECT * FROM interaction_dispatches WHERE draft_key=?', (key,)).fetchone()
+            if bound:
+                from youtube_comments_candidate import _checked_plan, _receipt_key
+                intent = _checked_plan(root, bound['plan_key'], bound['account'], bound['channel_id'])
+                if (root / (_receipt_key(intent) + '.json')).exists():
+                    raise PublishError('草稿已有发送尝试，保留原计划与恢复点，不能撤销后重发')
         count=db.execute('DELETE FROM interaction_drafts WHERE draft_key=?',(key,)).rowcount
     return {'withdrawn': count, 'platform_action':False}
 

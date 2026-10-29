@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unwired YouTube comment candidate. No CLI or automatic sends.
+"""YouTube comment plans, explicit sends and read-only reconciliation.
 
 The caller must bind a real user decision to an intent digest. Only use with
 an OAuth token for the intended channel and a private, shared state directory.
@@ -15,6 +15,7 @@ import re
 import argparse
 import sys
 import urllib.parse
+from contextlib import contextmanager
 
 from environment import EnvironmentError, load_profile
 from publish_core import PublishError, digest, now, read_json, write_json
@@ -131,7 +132,67 @@ def _receipt_key(intent):
     return hashlib.sha256(json.dumps(intent, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def send(client, intent, *, approved_digest, state_dir, allow_write=False):
+@contextmanager
+def account_lock(root, channel):
+    """Serialize comment writes for one channel in the shared local ledger."""
+    _id(channel, CHANNEL_ID, '频道 ID')
+    path = root / ('channel-' + channel + '.lock')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'a+') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def _verified_remote(client, intent, receipt):
+    remote, thread_id = receipt.get('remote_id'), receipt.get('thread_id')
+    if (not isinstance(remote, str) or not COMMENT_ID.fullmatch(remote)
+            or not isinstance(thread_id, str) or not COMMENT_ID.fullmatch(thread_id)):
+        return False
+    if intent['parent_id'] and thread_id != intent['parent_thread_id']:
+        return False
+    thread = _get_one(client, 'commentThreads', thread_id)
+    ts = thread.get('snippet') if isinstance(thread, dict) else None
+    item = _get_one(client, 'comments', remote)
+    cs = item.get('snippet') if isinstance(item, dict) else None
+    if not isinstance(ts, dict) or not isinstance(cs, dict):
+        return False
+    top, author = ts.get('topLevelComment'), cs.get('authorChannelId')
+    return (thread.get('id') == thread_id and ts.get('channelId') == intent['channel_id']
+            and ts.get('videoId') == intent['video_id'] and isinstance(top, dict)
+            and top.get('id') == (intent['parent_id'] or remote)
+            and item.get('id') == remote and cs.get('textOriginal') == intent['text']
+            and (cs.get('parentId') or None) == intent['parent_id']
+            and isinstance(author, dict) and author.get('value') == intent['channel_id'])
+
+
+def reconcile(client, intent, *, state_dir):
+    """GET only; missing IDs or failed readback never authorize another POST."""
+    root = _private_dir(state_dir)
+    path = root / (_receipt_key(intent) + '.json')
+    with account_lock(root, intent['channel_id']):
+        if not path.exists():
+            return {'state': 'not_attempted', 'intent_digest': digest(intent)}
+        receipt = read_json(path)
+        if receipt.get('intent_digest') != digest(intent):
+            raise PublishError('评论回执与计划不符')
+        identity(client, intent['channel_id'])
+        if SCOPE not in client.granted_scopes():
+            raise PublishError('缺少 YouTube 评论权限')
+        if not receipt.get('remote_id') or not receipt.get('thread_id'):
+            return {**receipt, 'reconciliation': 'missing_remote_identity', 'currently_verified': None}
+        try:
+            verified = _verified_remote(client, intent, receipt)
+        except (PublishError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            return {**receipt, 'reconciliation': 'read_failed', 'currently_verified': None}
+        if verified:
+            receipt.update(state='verified', last_verified_at=now())
+            write_json(path, receipt)
+            return {**receipt, 'reconciliation': 'verified', 'currently_verified': True}
+        # Preserve historical success, but do not report it as current visibility.
+        return {**receipt, 'reconciliation': 'not_verified', 'currently_verified': False}
+
+
+def send(client, intent, *, approved_digest, state_dir, allow_write=False, before_send=None):
     """One attempt only. Uncertain outcomes remain blocked, never auto-retry.
 
     This digest is only a binding, not proof of user approval; caller must obtain
@@ -151,11 +212,16 @@ def send(client, intent, *, approved_digest, state_dir, allow_write=False):
     lock_path = root / (key + '.lock')
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
     try:
-        with os.fdopen(fd, 'a+') as lock:
+        with os.fdopen(fd, 'a+') as lock, account_lock(root, intent['channel_id']):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             if receipt_path.exists():
-                return read_json(receipt_path)
+                receipt = read_json(receipt_path)
+                if receipt.get('intent_digest') != digest(intent):
+                    raise PublishError('评论回执与计划不符')
+                return receipt
             _preflight(client, intent)
+            if before_send is not None:
+                before_send(client, intent)
             receipt = {'state': 'unknown', 'intent_digest': digest(intent), 'attempted_at': now()}
             write_json(receipt_path, receipt)
             # Ensure the write-ahead record reaches the directory before POST.
@@ -186,23 +252,7 @@ def send(client, intent, *, approved_digest, state_dir, allow_write=False):
                 receipt['remote_id'] = remote
                 receipt['thread_id'] = thread_id
                 write_json(receipt_path, receipt)
-                thread = _get_one(client, 'commentThreads', thread_id)
-                thread_snippet = thread.get('snippet') if isinstance(thread, dict) else None
-                if not isinstance(thread_snippet, dict): return receipt
-                thread_top = thread_snippet.get('topLevelComment', {})
-                item = _get_one(client, 'comments', remote)
-                snippet = item.get('snippet') if isinstance(item, dict) else None
-                if not isinstance(snippet, dict): return receipt
-                author = snippet.get('authorChannelId', {})
-                expected_root = intent['parent_id'] or remote
-                if (thread and thread.get('id') == thread_id
-                        and thread_snippet.get('channelId') == intent['channel_id']
-                        and thread_snippet.get('videoId') == intent['video_id']
-                        and isinstance(thread_top, dict) and thread_top.get('id') == expected_root
-                        and item and item.get('id') == remote
-                        and snippet.get('textOriginal') == intent['text']
-                        and (snippet.get('parentId') or None) == intent['parent_id']
-                        and isinstance(author, dict) and author.get('value') == intent['channel_id']):
+                if _verified_remote(client, intent, receipt):
                     receipt['state'] = 'verified'
                     write_json(receipt_path, receipt)
             except (PublishError, OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -261,6 +311,8 @@ def _cli_parser():
     submit.add_argument('--key', required=True)
     status = sub.add_parser('status', help='只读查看本地一次性发送记录，不查询平台')
     status.add_argument('--key', required=True)
+    check = sub.add_parser('reconcile', help='只读重新查询已提交评论，不重新发送')
+    check.add_argument('--key', required=True)
     return p
 
 
@@ -315,6 +367,8 @@ def run_cli(argv=None, *, client_factory=APIClient):
                    threads(client, channel_id=channel, page_token=args.page_token, page_size=args.page_size)
         return replies(client, args.parent, page_token=args.page_token, page_size=args.page_size)
     intent = _checked_plan(root, args.key, args.account, channel)
+    if args.action == 'reconcile':
+        return reconcile(client, intent, state_dir=root)
     grant = read_json(root / ('grant-' + args.key + '.json'))
     if (grant.get('account') != args.account or grant.get('intent_digest') != args.key
             or not isinstance(grant.get('user_statement'), str) or not grant['user_statement'].strip()):

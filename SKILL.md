@@ -15,7 +15,7 @@ metadata:
 
 首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
 
-需要发现评论、汇总待处理互动或回复时，先读 [互动流程](references/interaction.md) 和 [平台能力与限制](references/interaction-platforms.md)，再按需读 [YouTube 评论候选](references/youtube-comments.md)。YouTube 使用官方 API 并需单独授权；目前仅单账号查询、自评论及自回复完成真实读回，其他平台和他人评论回复不能据此视为已验收。收件箱只读同步不会自动发送，平台不支持或权限未获批时不得虚报可用。
+需要发现评论、汇总待处理互动或回复时，先读 [互动流程](references/interaction.md) 和 [平台能力与限制](references/interaction-platforms.md)，再按需读 [YouTube 评论候选](references/youtube-comments.md)；已有网友草稿接力发送时读 [YouTube 草稿队列](references/interaction-youtube-queue.md)。YouTube 使用官方 API 并需单独授权；目前仅单账号查询、自评论及自回复完成真实读回，统一发送队列仅经离线验收，其他平台和他人评论回复不能据此视为已验收。收件箱只读同步不会自动发送，平台不支持或权限未获批时不得虚报可用。
 
 分发后在对话中按平台简述状态；系列多集优先按[批量分发](references/campaign.md)中的 `series-report` 生成精简看板，每个平台账号一行、每集一个状态格，并说明有证据的原因和建议。普通任务可用 `batch-report` 查看详细信息。明确区分账本快照、草稿、待作者操作和已核验公开；无记录不等于未发布，不创建假记录凑看板。
 

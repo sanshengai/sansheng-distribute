@@ -32,8 +32,11 @@ python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --
 python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --account owner --state-dir /path/to/private-state authorize --key PLAN_KEY --user-statement-file /path/to/approval.txt
 python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --account owner --state-dir /path/to/private-state send --key PLAN_KEY
 python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --account owner --state-dir /path/to/private-state status --key PLAN_KEY
+python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --account owner --state-dir /path/to/private-state reconcile --key PLAN_KEY
 ```
 
 `prepare` 和 `authorize` 会写入本地私有账本，`send` 会向平台发表。发送前检查频道、视频及父评论归属，发送后独立读回评论串及评论；只有 `verified` 才表示上述字段核对通过。`status` 只查看本地记录，不向平台查询，不能证明平台当前公开可见。超时、响应缺失或读回失败为 `unknown`；先沿原账本和平台只读核验，禁止自动重发、换账本重发或因为找不到立即创建新计划。保存状态直到确认不再需要恢复。
+
+`reconcile` 是只读平台查询，沿原计划核对已保存的远端 ID。缺少 ID 时保持未知、不自动重发；返回的 `currently_verified` 区分本次核验与历史成功。统一收件箱中的网友草稿优先走 [草稿与受控发送](interaction-youtube-queue.md)，以便发送前检查原文变化及已有本人回复。
 
 依据：[评论串查询](https://developers.google.com/youtube/data/reference/rest/v3/commentThreads/list)、[评论串创建](https://developers.google.com/youtube/data/reference/rest/v3/commentThreads/insert)、[回复评论](https://developers.google.com/youtube/data/reference/rest/v3/comments/insert)、[评论资源](https://developers.google.com/youtube/data/reference/rest/v3/comments)。

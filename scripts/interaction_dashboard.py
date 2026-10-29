@@ -49,6 +49,8 @@ def render(db_path, include_text=False, requested=()):
         observations = [json.loads(r[0]) for r in db.execute('SELECT document FROM interaction_observations ORDER BY observed_at, recorded_at')] if has_observations else []
         has_drafts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_drafts'").fetchone()
         drafts = [dict(r) for r in db.execute('SELECT * FROM interaction_drafts ORDER BY created_at')] if has_drafts else []
+        has_dispatches = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_dispatches'").fetchone()
+        dispatches = {r['draft_key']: dict(r) for r in db.execute('SELECT * FROM interaction_dispatches')} if has_dispatches else {}
     by_source = {}
     for item in items:
         key = (item['platform'], item['account'], item['channel_id'])
@@ -121,6 +123,17 @@ def render(db_path, include_text=False, requested=()):
         detail_section = '<details><summary>查看待处理评论</summary><ul>' + (''.join(details) or '<li>当前记录中没有待处理评论。</li>') + '</ul></details>'
     if observation_details:
         detail_section += '<details><summary>查看网页回复历史（不计入自动同步）</summary><ul>' + ''.join(observation_details) + '</ul></details>'
+    if drafts:
+        bound = [d for d in drafts if d['draft_key'] in dispatches]
+        drafts = [d for d in drafts if d['draft_key'] not in dispatches]
+        labels = {'prepared': '已绑定，待授权', 'authorized': '已授权，待发送',
+                  'unknown': '结果不明，冻结重发', 'verified': '历史回执已核验'}
+        if bound:
+            queue_items = ''.join('<li>' + e(PLATFORMS.get(d['platform'], d['platform'])) + ' · '
+                + e(d['account']) + ' · ' + e(labels.get(dispatches[d['draft_key']]['state'],
+                                                       dispatches[d['draft_key']]['state']))
+                + (f'<p>{e(d["reply"])}</p>' if include_text else '') + '</li>' for d in bound)
+            detail_section += '<details><summary>YouTube 回复发送队列（' + str(len(bound)) + ' 条）</summary><p>本地队列快照；历史核验不保证当前可见。结果不明须沿原计划只读恢复，不能重复发送。</p><ul>' + queue_items + '</ul></details>'
     if drafts:
         draft_items = ''.join(f'<li>{e(PLATFORMS.get(d["platform"],d["platform"]))} · {e(d["account"])}'
                               + (f'<p>{e(d["reply"])}</p>' if include_text else '') + '</li>' for d in drafts)

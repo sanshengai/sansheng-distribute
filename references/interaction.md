@@ -44,7 +44,7 @@ python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<pr
 
 有真实评论 ID、已在收件箱中的网友评论，可通过 `scripts/interaction_drafts.py --state-dir <私有目录> prepare --platform <平台> --account <账号> --channel <频道ID> --comment <评论ID> --text-file <0600的回复文本文件>` 建立本地草稿。`list --include-text` 查看原评论与拟回复，默认 `list` 不输出正文；`withdraw --key <draft_key>` 只撤销本地草稿，不删除平台内容。每个原评论只保留一个候选，重复同文案去重，不同文案先核对再撤销旧稿。
 
-队列绑定原文、作者身份、作品和评论串快照；缓存内容变化标记 `needs_review`，已有处理标记或核验回复回执标记 `blocked`。这些检查只基于本地记录，不能证明平台原评论仍在。网页观察记录没有稳定 ID 时不进入此队列。草稿不授予发送权限、不自动生成内容、不发起网络请求；发送前按平台实际支持路径再次查看上下文和用户授权。YouTube 仍使用下文既有 `prepare / authorize / send` 流程，须取同一目标与文案；其他平台使用允许的网页交互。看板中的草稿数不代表可自动发送数。
+队列绑定原文、作者身份、作品和评论串快照；缓存内容变化标记 `needs_review`，已有处理标记或核验回复回执标记 `blocked`。这些检查只基于本地记录，不能证明平台原评论仍在。网页观察记录没有稳定 ID 时不进入此队列。草稿不授予发送权限、不自动生成内容、不发起网络请求；发送前按平台实际支持路径再次查看上下文和用户授权。YouTube 网友草稿可按 [受控发送队列](interaction-youtube-queue.md) 接力既有发送器，重查原文及已有回复，并沿同一计划只读恢复；此队列仅经离线验收。其他平台使用允许的网页交互。看板中的草稿数不代表可自动发送数；已有发送尝试的 YouTube 草稿不能撤销后换稿重发。
 
 ## 回复与防重
 
