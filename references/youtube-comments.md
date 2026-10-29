@@ -39,4 +39,6 @@ python3 scripts/youtube_comments_candidate.py --profile /path/to/profile.json --
 
 `reconcile` 是只读平台查询，沿原计划核对已保存的远端 ID。缺少 ID 时保持未知、不自动重发；返回的 `currently_verified` 区分本次核验与历史成功。统一收件箱中的网友草稿优先走 [草稿与受控发送](interaction-youtube-queue.md)，以便发送前检查原文变化及已有本人回复。
 
+历史计划仅账号别名变化时，可在 `reconcile` 后加 `--source-account <计划中的原别名>`，使用当前 profile 账号的有效授权只读核对同一频道。计划摘要、目标频道和实际授权频道仍须全部匹配；不改写旧计划或授权文件，此参数不能用于 `send` 或 `authorize`。无效计划与缺失发送授权在解析凭据前拒绝。
+
 依据：[评论串查询](https://developers.google.com/youtube/data/reference/rest/v3/commentThreads/list)、[评论串创建](https://developers.google.com/youtube/data/reference/rest/v3/commentThreads/insert)、[回复评论](https://developers.google.com/youtube/data/reference/rest/v3/comments/insert)、[评论资源](https://developers.google.com/youtube/data/reference/rest/v3/comments)。

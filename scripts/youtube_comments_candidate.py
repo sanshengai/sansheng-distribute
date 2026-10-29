@@ -313,6 +313,7 @@ def _cli_parser():
     status.add_argument('--key', required=True)
     check = sub.add_parser('reconcile', help='只读重新查询已提交评论，不重新发送')
     check.add_argument('--key', required=True)
+    check.add_argument('--source-account', help='历史计划中的原账号别名，仅用于只读核验同一频道')
     return p
 
 
@@ -353,6 +354,15 @@ def run_cli(argv=None, *, client_factory=APIClient):
         intent = _checked_plan(root, args.key, args.account, channel)
         path = root / (_receipt_key(intent) + '.json')
         return read_json(path) if path.exists() else {'state': 'not_attempted', 'key': args.key}
+    intent = grant = None
+    if args.action in {'send', 'reconcile'}:
+        source_account = (args.source_account or args.account) if args.action == 'reconcile' else args.account
+        intent = _checked_plan(root, args.key, source_account, channel)
+        if args.action == 'send':
+            grant = read_json(root / ('grant-' + args.key + '.json'))
+            if (grant.get('account') != args.account or grant.get('intent_digest') != args.key
+                    or not isinstance(grant.get('user_statement'), str) or not grant['user_statement'].strip()):
+                raise PublishError('缺少绑定该评论的实际用户授权')
     target = {'platform': 'youtube', 'account': args.account}
     configured_channel, token = config(profile, target, writing=args.action == 'send')
     if configured_channel != channel:
@@ -366,13 +376,9 @@ def run_cli(argv=None, *, client_factory=APIClient):
             return threads(client, video_id=args.video, page_token=args.page_token, page_size=args.page_size) if args.video else \
                    threads(client, channel_id=channel, page_token=args.page_token, page_size=args.page_size)
         return replies(client, args.parent, page_token=args.page_token, page_size=args.page_size)
-    intent = _checked_plan(root, args.key, args.account, channel)
     if args.action == 'reconcile':
-        return reconcile(client, intent, state_dir=root)
-    grant = read_json(root / ('grant-' + args.key + '.json'))
-    if (grant.get('account') != args.account or grant.get('intent_digest') != args.key
-            or not isinstance(grant.get('user_statement'), str) or not grant['user_statement'].strip()):
-        raise PublishError('缺少绑定该评论的实际用户授权')
+        result = reconcile(client, intent, state_dir=root)
+        return {**result, 'source_account': source_account, 'execution_account': args.account}
     receipt = send(client, intent, approved_digest=args.key, state_dir=root, allow_write=True)
     if receipt.get('state') == 'verified' and intent.get('parent_id'):
         from interaction_receipts import record_reply

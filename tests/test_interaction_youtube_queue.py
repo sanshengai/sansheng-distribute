@@ -17,6 +17,7 @@ from interaction_inbox import open_db
 from interaction_youtube_queue import authorize, execute, prepare, run_cli
 from publish_core import PublishError, digest, read_json, write_json
 from youtube_comments_candidate import SCOPE, _receipt_key, make_intent, reconcile, send
+from youtube_comments_candidate import run_cli as comments_cli
 
 CHANNEL = 'UC' + 'a' * 22
 AUTHOR = 'UC' + 'b' * 22
@@ -227,6 +228,38 @@ class QueueTests(unittest.TestCase):
         with self.assertRaises(PublishError):
             execute(self.root, key, ACCOUNT, CHANNEL, self.client)
         self.assertEqual(self.client.posts, [])
+
+    def test_legacy_alias_readback_never_changes_plan_or_enables_send(self):
+        key, plan_key = self.authorized()
+        execute(self.root, key, ACCOUNT, CHANNEL, self.client)
+        plan_path = self.root / ('plan-' + plan_key + '.json')
+        plan = read_json(plan_path)
+        plan['account'] = 'previous-owner-alias'
+        write_json(plan_path, plan)
+        original = plan_path.read_bytes()
+        profile_path = Path(self.tmp.name) / 'profile.json'
+        write_json(profile_path, {'accounts': {ACCOUNT: dict(platforms=['youtube'],
+            public_identities={'youtube': CHANNEL}, youtube_token_env='QUEUE_TEST_TOKEN')}})
+        prefix = ['--profile', str(profile_path), '--account', ACCOUNT, '--state-dir', str(self.root)]
+        with patch.dict('os.environ', {'QUEUE_TEST_TOKEN': 'offline-token'}):
+            with patch('youtube_comments_candidate.config', side_effect=AssertionError('invalid plan reached credential resolution')):
+                with self.assertRaises(PublishError):
+                    comments_cli(prefix + ['reconcile', '--key', plan_key])
+                with self.assertRaises(PublishError):
+                    comments_cli(prefix + ['send', '--key', plan_key])
+            result = comments_cli(prefix + ['reconcile', '--key', plan_key, '--source-account', 'previous-owner-alias'],
+                                  client_factory=lambda _: self.client)
+            self.assertTrue(result['currently_verified'])
+            self.assertEqual(result['execution_account'], ACCOUNT)
+            self.assertEqual(result['source_account'], 'previous-owner-alias')
+            plan['intent']['channel_id'] = AUTHOR
+            other_key = digest(plan['intent'])
+            write_json(self.root / ('plan-' + other_key + '.json'), plan)
+            with self.assertRaises(PublishError):
+                comments_cli(prefix + ['reconcile', '--key', other_key, '--source-account', 'previous-owner-alias'],
+                             client_factory=lambda _: self.fail('wrong channel reached API'))
+        self.assertEqual(plan_path.read_bytes(), original)
+        self.assertEqual(len(self.client.posts), 1)
 
     def test_lost_readback_recovers_without_another_post(self):
         key, _ = self.authorized()
