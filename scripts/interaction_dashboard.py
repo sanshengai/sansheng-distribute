@@ -3,6 +3,7 @@
 import argparse
 from contextlib import closing
 import html
+import json
 import os
 import re
 import sqlite3
@@ -44,6 +45,10 @@ def render(db_path, include_text=False, requested=()):
         replied = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,parent_id FROM interaction_reply_receipts')} if has_receipts else set()
         has_provenance = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_manual_provenance'").fetchone()
         manual = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,comment_id FROM interaction_manual_provenance')} if has_provenance else set()
+        has_observations = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_observations'").fetchone()
+        observations = [json.loads(r[0]) for r in db.execute('SELECT document FROM interaction_observations ORDER BY observed_at, recorded_at')] if has_observations else []
+        has_drafts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_drafts'").fetchone()
+        drafts = [dict(r) for r in db.execute('SELECT * FROM interaction_drafts ORDER BY created_at')] if has_drafts else []
     by_source = {}
     for item in items:
         key = (item['platform'], item['account'], item['channel_id'])
@@ -87,6 +92,24 @@ def render(db_path, include_text=False, requested=()):
                 origin = ' · 人工导入' if (*key, item['comment_id']) in manual else ''
                 details.append(f"<li><b>{e(PLATFORMS.get(platform, platform))} · {e(item['author_name'] or '未显示昵称')}{origin}</b>"
                                f" <span>{e(local_time(item['published_at']))}</span><p>{e(item['body'])}</p>{link}</li>")
+    # Separate evidence lane: never count browser observations as API inbox items.
+    latest = {}
+    for observation in observations:
+        latest[(observation['platform'], observation['account'])] = observation
+    labels = {'observed': '网页已检查', 'partial': '网页部分检查', 'blocked': '受阻', 'paused': '暂停', 'unavailable': '当前不可用'}
+    for (platform, account), observation in sorted(latest.items()):
+        seen_platforms.add(platform)
+        note = '范围：' + observation['scope'] + '；原因：' + observation['reason'] + '；下一步：' + observation['next_action']
+        rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(account)}</td>"
+                    f"<td>{e(labels[observation['state']])}</td><td>未统计</td><td>另见网页记录</td>"
+                    f"<td>{e(local_time(observation['observed_at']))}（观察）</td><td>{e(note)}</td></tr>")
+    observation_details = []
+    if include_text:
+        for observation in observations:
+            for reply in observation['replies']:
+                observation_details.append(f"<li><b>{e(PLATFORMS.get(observation['platform']))} · {e(reply['author'])}</b>"
+                    f" · {e(reply['work'])}<p>原评：{e(reply['comment'])}</p><p>已回复：{e(reply['reply'])}</p>"
+                    f"<p>网页读回记录（非 API 回执）：{e(reply['verification'])}</p></li>")
     for platform in requested:
         if platform not in seen_platforms:
             rows.append(f'<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>—</td><td>无同步记录</td>'
@@ -96,11 +119,17 @@ def render(db_path, include_text=False, requested=()):
     detail_section = ''
     if include_text:
         detail_section = '<details><summary>查看待处理评论</summary><ul>' + (''.join(details) or '<li>当前记录中没有待处理评论。</li>') + '</ul></details>'
+    if observation_details:
+        detail_section += '<details><summary>查看网页回复历史（不计入自动同步）</summary><ul>' + ''.join(observation_details) + '</ul></details>'
+    if drafts:
+        draft_items = ''.join(f'<li>{e(PLATFORMS.get(d["platform"],d["platform"]))} · {e(d["account"])}'
+                              + (f'<p>{e(d["reply"])}</p>' if include_text else '') + '</li>' for d in drafts)
+        detail_section += '<details><summary>本地回复草稿（' + str(len(drafts)) + ' 条；非发送队列）</summary><p>草稿不表示已授权或已发送；发送前用 interaction_drafts.py list 核对原评论变化及既有回复回执，再检查平台当前上下文。</p><ul>' + draft_items + '</ul></details>'
     stamp = datetime.now(timezone.utc).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M')
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>互动收件箱</title><style>body{{font:14px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#163b3d;background:#f2f7f5;margin:0;padding:28px}}main{{max-width:1200px;margin:auto}}h1{{font-size:24px;margin:0 0 8px}}p.note{{color:#526d6d;line-height:1.6}}.box{{overflow-x:auto;background:white;border:1px solid #d8e7e1;border-radius:10px}}table{{width:100%;border-collapse:collapse;min-width:760px}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #e5efeb;vertical-align:top}}th{{color:#526d6d;font-weight:600}}td:last-child{{max-width:400px;overflow-wrap:anywhere}}details{{margin-top:20px}}li{{padding:10px;border-bottom:1px solid #d8e7e1}}li p{{white-space:pre-wrap}}li span{{color:#526d6d}}</style></head><body><main>
 <h1>互动收件箱</h1><p class="note">本地快照 · 北京时间 {e(stamp)}。数字只代表已获取并保留的记录；检查不完整、失败或无同步记录时，不能判断平台没有新评论。</p>
-<div class="box"><table><thead><tr><th>平台</th><th>账号</th><th>检查状态</th><th>待处理</th><th>已处理</th><th>上次成功</th><th>覆盖情况与原因</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>{detail_section}
+<div class="box"><table><thead><tr><th>平台</th><th>账号</th><th>检查状态</th><th>待处理</th><th>已处理</th><th>最近完整同步／网页观察</th><th>覆盖情况与原因</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>{detail_section}
 <p class="note">此页面不会实时更新，也不会发送回复。评论及账号资料属于私有信息，请保存在私人位置。</p></main></body></html>'''
 
 

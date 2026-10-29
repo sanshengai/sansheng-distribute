@@ -34,6 +34,18 @@ python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<pr
 
 看板将这类记录标为人工导入，并明确未证明平台已同步或全部查完。人工导入不会自动访问平台或发布回复；标记为已处理的命令及参数可用 `python3 scripts/interaction_import.py --help`、`python3 scripts/interaction_import.py --state-dir '<state-dir>' mark --help` 查看。状态目录不得放在 Skill 公开仓中。
 
+## 没有稳定评论 ID 的网页记录
+
+网页检查、暂停和权限阻塞可以通过 `scripts/interaction_observations.py --state-dir <私有目录> --input <0600的JSON>` 记录。记录与自动采集账本分开；本地摘要只用于去重同一份观察，不是平台评论 ID，不能用作发送目标。每次记录保留历史，看板按平台和账号展示最新检查范围、原因与下一步，并折叠展示历史网页回复。它不会补出未查看的评论，也不会把无 ID 的记录计算为完整待处理数量。
+
+输入必须包含：`platform`、`account`、带时区的 `observed_at`、`state`（`observed`、`partial`、`blocked`、`paused` 或 `unavailable`）、`scope`、`reason`、`next_action`、`evidence` 和 `replies`。检查时间填写实际观察时间，不用整理记录的时间冒充刚查过。`replies` 可为空；每条回复包含 `author`、`comment`、`work`、`reply`、`verification`，分别记录原作者、原评、作品、实际回复及重新加载后的读回证据。只记录已经发生的动作；草稿不放这里，文字证据不等于程序独立验真。后续检查失败不得抹掉先前成功回复。
+
+## 统一回复草稿
+
+有真实评论 ID、已在收件箱中的网友评论，可通过 `scripts/interaction_drafts.py --state-dir <私有目录> prepare --platform <平台> --account <账号> --channel <频道ID> --comment <评论ID> --text-file <0600的回复文本文件>` 建立本地草稿。`list --include-text` 查看原评论与拟回复，默认 `list` 不输出正文；`withdraw --key <draft_key>` 只撤销本地草稿，不删除平台内容。每个原评论只保留一个候选，重复同文案去重，不同文案先核对再撤销旧稿。
+
+队列绑定原文、作者身份、作品和评论串快照；缓存内容变化标记 `needs_review`，已有处理标记或核验回复回执标记 `blocked`。这些检查只基于本地记录，不能证明平台原评论仍在。网页观察记录没有稳定 ID 时不进入此队列。草稿不授予发送权限、不自动生成内容、不发起网络请求；发送前按平台实际支持路径再次查看上下文和用户授权。YouTube 仍使用下文既有 `prepare / authorize / send` 流程，须取同一目标与文案；其他平台使用允许的网页交互。看板中的草稿数不代表可自动发送数。
+
 ## 回复与防重
 
 YouTube `send` 获得 `verified` 回执后，会把匹配的父评论回复记录写回同一目录的收件箱。看板将其列为“平台已核验回复（历史回执）”，与人工“已处理”区分；不会据历史回执保证回复永远公开。父评论尚未同步时返回 `parent_not_in_inbox`，不能冒充已入收件箱；同步后沿原计划再次执行会复用既有回执，不重新发表。收件箱更新失败也不改变平台发送结果，禁止为修复看板另建回复计划。
