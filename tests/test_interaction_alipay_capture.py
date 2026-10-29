@@ -65,7 +65,7 @@ class AlipayCaptureTests(unittest.TestCase):
             selection = {k: pending[k] for k in ('platform', 'account', 'channel_id', 'comment_id', 'source_digest', 'draft_key')}
             batch = desk.confirm([{**selection, 'reply': 'An edited suggestion'}])
             self.assertEqual((batch['confirmed'], batch['sendable']), (1, 0))
-            self.assertEqual(desk.dispatch(batch['batch_id'])['results'][0]['state'], 'manual')
+            self.assertEqual(desk.dispatch(batch['batch_id'])['results'][0]['state'], 'handoff_pending')
             with open_db(root) as db:
                 tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 self.assertNotIn('interaction_reply_receipts', tables)

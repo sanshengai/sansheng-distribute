@@ -55,6 +55,19 @@ python3 scripts/interaction_alipay_capture.py \
 
 导入后使用[统一互动审核页](interaction-review.md)。显示作品标题及网页读取时间；在原对话观察到本人回复的根评论标为“网页已有本人回复”，不进入新草稿队列。名称比对只用于整理本人留言，并非经过平台认证的作者身份或 API 回执。
 
-其余留言可准备本地草稿、局部修改和批量确认。支付宝发送路线仍显示“人工接力”：确认不等于公开发送，也不能记为 API 已核验。Agent 接力时重新核对当前账号、作品、原评及已有回复，只发送作者已确认文案；发送后独立读回关联回复再报告。当前没有审核页直连浏览器发送或24小时采集器。
+其余留言可准备本地草稿、局部修改和批量确认，再点“交给 Agent 发送”。待办保存在本机，不需要向聊天窗口另传确认文件；当前 Agent 会话负责在专用浏览器执行，离线时不会自动发出。确认、提交待办、平台发送、网页核对是不同状态，不能记为 API 已核验。
+
+Agent 先读取待办，核对当前账号、作品、原评及已有本人回复。填入封存文案后、最终点击平台回复前领取该条任务；领取会冻结同一原评的其他发送批次。点击后刷新原对话、展开回复并重新采集，使用真实子回复标识完成核对。作品映射可复用已有实际选择器记录，须明确记录其观察时间；原评和新回复必须重新读取。不要通过终端、未公开接口或注入请求代替浏览器点击。
+
+```sh
+python3 scripts/interaction_review_handoff.py --state-dir /path/to/private-state list
+python3 scripts/interaction_review_handoff.py --state-dir /path/to/private-state claim --batch '<确认批次>' --draft '<草稿标识>'
+# 浏览器发送后重新采集，并运行 interaction_alipay_capture.py 接入读回证据
+python3 scripts/interaction_review_handoff.py --state-dir /path/to/private-state verify --batch '<确认批次>' --draft '<草稿标识>' --reply-id '<真实子回复DOM标识>'
+# 点击中断或结果不明：冻结原尝试，重新读回，不再点击发送
+python3 scripts/interaction_review_handoff.py --state-dir /path/to/private-state unknown --batch '<确认批次>' --draft '<草稿标识>'
+```
+
+上述CLI只处理本地待办和证据，不联网、不操作浏览器。`verify`要求确认后领取的原尝试，以及发送后观察到的本人回复、原评归属和逐字一致的正文；旧页面记录、其他留言下的同文案或结果不明都不能当作成功。当前没有审核页自主驱动浏览器或24小时采集器。
 
 `tests/test_interaction_alipay_capture.py` 验证真实导入路径、去重、已有对话、审核状态和人工路线，及账号、原文、作品、空输入和重复面板的拒绝情况。测试通过不代表平台权限或界面永不改变。

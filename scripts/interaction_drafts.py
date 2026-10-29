@@ -24,6 +24,10 @@ def source(db, platform, account, channel, comment):
         raise PublishError('原评论不在收件箱；网页观察摘要不是平台评论ID')
     if row['is_own'] or row['local_status'] != 'new':
         raise PublishError('本人评论或已处理评论不加入网友回复草稿队列')
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_review_handoffs'").fetchone():
+        if db.execute('''SELECT 1 FROM interaction_review_handoffs WHERE platform=? AND account=?
+            AND channel_id=? AND comment_id=?''', (platform, account, channel, comment)).fetchone():
+            raise PublishError('已有浏览器发送尝试；先检查原结果，不能修改重发')
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_reply_receipts'").fetchone():
         if db.execute('''SELECT 1 FROM interaction_reply_receipts WHERE platform=? AND account=?
                       AND channel_id=? AND parent_id=?''',(platform,account,channel,comment)).fetchone():
@@ -121,6 +125,9 @@ def withdraw(root, key):
     from youtube_comments_candidate import account_lock
     guard = account_lock(root, row['channel_id']) if row and row['platform'] == 'youtube' else nullcontext()
     with guard, _lock(root), open_db(root) as db:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_review_handoffs'").fetchone():
+            if db.execute('SELECT 1 FROM interaction_review_handoffs WHERE draft_key=?', (key,)).fetchone():
+                raise PublishError('已有浏览器发送尝试，保留草稿与恢复点，不能撤销重发')
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_dispatches'").fetchone():
             bound = db.execute('SELECT * FROM interaction_dispatches WHERE draft_key=?', (key,)).fetchone()
             if bound:

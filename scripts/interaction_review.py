@@ -29,7 +29,11 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS interaction_review_batches (
  batch_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, confirmed_at TEXT NOT NULL, nonce TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS interaction_review_results (
  batch_id TEXT NOT NULL, draft_key TEXT NOT NULL, state TEXT NOT NULL,
- result_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(batch_id,draft_key));'''
+ result_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(batch_id,draft_key));
+CREATE TABLE IF NOT EXISTS interaction_review_handoffs (
+ platform TEXT NOT NULL,account TEXT NOT NULL,channel_id TEXT NOT NULL,comment_id TEXT NOT NULL,
+ batch_id TEXT NOT NULL,draft_key TEXT NOT NULL,state TEXT NOT NULL,claimed_at TEXT NOT NULL,
+ reply_id TEXT,PRIMARY KEY(platform,account,channel_id,comment_id));'''
 
 
 def _key(value):
@@ -58,6 +62,26 @@ class ReviewDesk:
         if (platform, account, channel) == ('youtube', self.account, self.channel):
             return True, 'YouTube 官方 API；发送前重新核对原评论与已有回复'
         return False, '尚未接通受控发送；可以确认建议并复制到平台，不能一键发送'
+
+    @staticmethod
+    def _handoffable(db, item):
+        if item['platform'] != 'alipay':
+            return False
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_web_provenance'").fetchone():
+            return False
+        return bool(db.execute('''SELECT 1 FROM interaction_web_provenance
+            WHERE platform=? AND account=? AND channel_id=? AND comment_id=?
+            AND identity_kind='alipay_dom' ''', tuple(item[k] for k in IDENTITY)).fetchone())
+
+    @staticmethod
+    def _current_draft(db, item):
+        _, fingerprint = source(db, *(item[k] for k in IDENTITY))
+        draft = db.execute('''SELECT * FROM interaction_drafts WHERE platform=? AND account=?
+            AND channel_id=? AND comment_id=?''', tuple(item[k] for k in IDENTITY)).fetchone()
+        if (not draft or fingerprint != item['source_digest'] or
+                any(draft[k] != item[k] for k in ('draft_key', 'source_digest', 'reply')) or
+                draft['created_at'] != item['draft_created_at']):
+            raise PublishError('已确认文案或原留言已变化，请重新确认')
 
     def snapshot(self):
         rows = []
@@ -112,6 +136,20 @@ class ReviewDesk:
                         except (ValueError, TypeError):
                             suggestion, reason = None, '已有建议记录格式无效，请重新拟稿'
                 sendable, route_reason = self.route(*identity[:3])
+                handoffable = self._handoffable(db, item)
+                claim = db.execute('''SELECT state,batch_id FROM interaction_review_handoffs
+                    WHERE platform=? AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone()
+                if claim and claim['state'] in {'attempting', 'unknown'}:
+                    eligible = False
+                    reason = 'Agent 已开始发送；检查原结果后再处理，不能修改重发'
+                    status_label = ('Agent 正在处理' if claim['state'] == 'attempting'
+                                    else 'Agent 需要检查发送结果')
+                elif claim and claim['state'] == 'verified':
+                    handled = True
+                    status_label = '本次回复已发送并核对'
+                    reason = '专用浏览器发送后刷新原对话，已核对本人回复及其关联；不是官方 API 回执'
+                if handoffable:
+                    route_reason = '可交给当前 Agent 在专用浏览器发送；提交后等待执行，不代表已经发出'
                 parent = item['parent_id'] or item['comment_id']
                 context = [dict(r) for r in db.execute('''SELECT author_name,body,is_own
                     FROM interaction_items WHERE platform=? AND account=? AND channel_id=?
@@ -122,9 +160,12 @@ class ReviewDesk:
                              'author_name': item['author_name'] or '网友', 'comment': item['body'] or '',
                              'reply': reply, 'source_digest': fingerprint,
                              'draft_key': draft['draft_key'] if draft else None,
+                             'draft_created_at': draft['created_at'] if draft else None,
                              'source_kind': web['identity_kind'] if web else None,
                              'work_title': web['work_title'] if web else None,
                              'eligible': eligible, 'reason': reason, 'sendable': sendable,
+                             'handoffable': handoffable,
+                             'handoff_state': claim['state'] if claim else None,
                              'route_reason': route_reason, 'suggestion': suggestion, 'context': context,
                              'published_at': item['published_at'], 'handled': handled, 'status_label': status_label})
             sources = [dict(r) for r in db.execute('''SELECT platform,account,state,last_success_at
@@ -146,7 +187,8 @@ class ReviewDesk:
                 result = [json.loads(r[0]) for r in db.execute('''SELECT result_json
                     FROM interaction_review_results WHERE batch_id=? ORDER BY rowid''', (b['batch_id'],))]
                 batches.append({'batch_id': b['batch_id'], 'confirmed_at': b['confirmed_at'],
-                                'count': len(json.loads(b['payload_json'])), 'results': result})
+                                'count': len(json.loads(b['payload_json'])),
+                                'items': json.loads(b['payload_json']), 'results': result})
         return {'items': rows, 'truncated': len(all_items) > 500, 'sources': sources,
                 'platforms': LABELS, 'pending_context': discovered, 'batches': batches,
                 'checked_at': now(), 'note': '本机收件箱快照；刷新不代表重新扫描各平台'}
@@ -191,8 +233,10 @@ class ReviewDesk:
                 db.execute('INSERT INTO interaction_review_batches VALUES(?,?,?,?)',
                            (batch_id, json.dumps(accepted, ensure_ascii=False), stamp, nonce))
         sendable = sum(self.route(*(r[k] for k in IDENTITY[:3]))[0] for r in accepted)
+        with _lock(self.root), open_db(self.root) as db:
+            handoffable = sum(self._handoffable(db, r) for r in accepted)
         return {'batch_id': batch_id, 'confirmed': len(accepted), 'accepted': accepted,
-                'sendable': sendable, 'errors': errors, 'social_writes': 0}
+                'sendable': sendable, 'handoffable': handoffable, 'errors': errors, 'social_writes': 0}
 
     def _batch(self, batch_id, *, for_send=True):
         _key(batch_id)
@@ -227,7 +271,36 @@ class ReviewDesk:
             key, account, channel = item['draft_key'], item['account'], item['channel_id']
             can_send, reason = self.route(item['platform'], account, channel)
             if not can_send:
-                output.append(self._result(batch_id, item, 'manual', reason))
+                with _lock(self.root), open_db(self.root) as db:
+                    prior = db.execute('''SELECT result_json FROM interaction_review_results
+                        WHERE batch_id=? AND draft_key=?''', (batch_id, key)).fetchone()
+                    web = self._handoffable(db, item)
+                    claim = db.execute('''SELECT state,batch_id,draft_key FROM interaction_review_handoffs WHERE
+                        platform=? AND account=? AND channel_id=? AND comment_id=?''',
+                        tuple(item[k] for k in IDENTITY)).fetchone()
+                    error = None
+                    if web and not reconcile and not claim:
+                        try:
+                            self._current_draft(db, item)
+                        except PublishError as exc:
+                            error = str(exc)
+                if reconcile:
+                    output.append(json.loads(prior[0]) if prior else
+                        {**{k: item[k] for k in IDENTITY}, 'draft_key': key,
+                         'state': 'not_attempted', 'reason': '尚无发送尝试，无需检查平台结果'})
+                elif claim:
+                    same_attempt = (claim['batch_id'], claim['draft_key']) == (batch_id, key)
+                    output.append(self._result(batch_id, item,
+                        'handoff_' + claim['state'] if same_attempt else 'blocked',
+                        '已有浏览器发送记录；保留原结果，不重复发送' if same_attempt else
+                        '原留言已有其他确认批次的发送尝试；不能重发或将其记为本批成功'))
+                elif error:
+                    output.append(self._result(batch_id, item, 'blocked', error))
+                elif web:
+                    output.append(self._result(batch_id, item, 'handoff_pending',
+                        '已保存到 Agent 待办，等待当前会话在专用浏览器执行；尚未发送'))
+                else:
+                    output.append(self._result(batch_id, item, 'manual', reason))
                 continue
             with _lock(self.root), open_db(self.root) as db:
                 prior = db.execute('SELECT state FROM interaction_review_results WHERE batch_id=? AND draft_key=?',
@@ -274,6 +347,96 @@ class ReviewDesk:
                 output.append(self._result(batch_id, item, state,
                     '执行或核验未完成；刷新后检查原文、草稿、账号权限和原发送回执，不自动重试'))
         return {'batch_id': batch_id, 'results': output, 'reconcile_only': reconcile}
+
+    def handoffs(self):
+        """Local pending work only; never wake an Agent or operate a browser."""
+        with _lock(self.root), open_db(self.root) as db:
+            rows = db.execute('''SELECT batch_id,draft_key,state FROM interaction_review_results
+                WHERE state='handoff_pending' ORDER BY updated_at DESC LIMIT 200''').fetchall()
+        result, seen = [], set()
+        for row in rows:
+            try:
+                items = self._batch(row['batch_id'])
+                item = next(r for r in items if r['draft_key'] == row['draft_key'])
+                identity = tuple(item[k] for k in IDENTITY)
+                with _lock(self.root), open_db(self.root) as db:
+                    self._current_draft(db, item)
+                    if not self._handoffable(db, item) or db.execute('''SELECT 1 FROM
+                        interaction_review_handoffs WHERE platform=? AND account=? AND channel_id=?
+                        AND comment_id=?''', identity).fetchone():
+                        continue
+                if identity not in seen:
+                    result.append({**item, 'batch_id': row['batch_id'], 'state': row['state']})
+                    seen.add(identity)
+            except (PublishError, StopIteration):
+                continue
+        return result
+
+    def claim_handoff(self, batch_id, draft_key):
+        items = self._batch(batch_id)
+        item = next((r for r in items if r['draft_key'] == _key(draft_key)), None)
+        if not item:
+            raise PublishError('该草稿不在本批确认中')
+        identity = tuple(item[k] for k in IDENTITY)
+        with _lock(self.root), open_db(self.root) as db:
+            self._current_draft(db, item)
+            if not self._handoffable(db, item):
+                raise PublishError('未接通浏览器接力')
+            pending = db.execute('''SELECT state FROM interaction_review_results
+                WHERE batch_id=? AND draft_key=?''', (batch_id, draft_key)).fetchone()
+            if not pending or pending['state'] != 'handoff_pending':
+                raise PublishError('先提交已确认文案到 Agent 待办')
+            if db.execute('''SELECT 1 FROM interaction_review_handoffs WHERE platform=?
+                AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone():
+                raise PublishError('已有浏览器发送尝试；先检查原结果，不能重复发送')
+            stamp = now()
+            db.execute('INSERT INTO interaction_review_handoffs VALUES(?,?,?,?,?,?,?,?,?)',
+                       (*identity, batch_id, draft_key, 'attempting', stamp, None))
+        self._result(batch_id, item, 'handoff_attempting', 'Agent 已领取；如中断先核对原对话，不重发')
+        return {**item, 'batch_id': batch_id, 'claimed_at': stamp}
+
+    def finish_handoff(self, batch_id, draft_key, *, reply_id=None):
+        """Require a fresh imported web reply to mark browser delivery verified."""
+        items = self._batch(batch_id, for_send=False)
+        item = next((r for r in items if r['draft_key'] == _key(draft_key)), None)
+        if not item:
+            raise PublishError('该草稿不在本批确认中')
+        identity = tuple(item[k] for k in IDENTITY)
+        with _lock(self.root), open_db(self.root) as db:
+            claim = db.execute('''SELECT * FROM interaction_review_handoffs WHERE platform=?
+                AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone()
+            if not claim or (claim['batch_id'], claim['draft_key']) != (batch_id, draft_key):
+                raise PublishError('没有本批浏览器领取记录')
+            if claim['state'] == 'verified':
+                if reply_id != claim['reply_id']:
+                    raise PublishError('已核验回复身份不一致')
+                state = 'verified'
+            elif reply_id is None:
+                state = 'unknown'
+            else:
+                if not isinstance(reply_id, str) or not re.fullmatch(r'commentContent_[a-f0-9]{32}', reply_id):
+                    raise PublishError('须提供网页实际回复标识')
+                child = db.execute('''SELECT * FROM interaction_items WHERE platform=? AND account=?
+                    AND channel_id=? AND comment_id=?''', (*identity[:3], reply_id)).fetchone()
+                proof = db.execute('''SELECT observed_at FROM interaction_web_provenance WHERE platform=?
+                    AND account=? AND channel_id=? AND comment_id=? AND identity_kind='alipay_dom' ''',
+                    (*identity[:3], reply_id)).fetchone()
+                root = db.execute('''SELECT * FROM interaction_items WHERE platform=? AND account=?
+                    AND channel_id=? AND comment_id=?''', identity).fetchone()
+                fields = (*IDENTITY, 'video_id', 'thread_id', 'parent_id', 'author_channel', 'body')
+                if (not root or digest({k: root[k] for k in fields}) != item['source_digest'] or
+                        not child or not child['is_own'] or child['parent_id'] != item['comment_id'] or
+                        child['video_id'] != root['video_id'] or child['body'] != item['reply'] or not proof or
+                        datetime.fromisoformat(proof['observed_at']) < datetime.fromisoformat(claim['claimed_at']) or
+                        (datetime.fromisoformat(claim['claimed_at']) -
+                         datetime.fromisoformat(child['published_at'])).total_seconds() > 120):
+                    raise PublishError('网页读回未匹配本批原评、本人回复、原文及新观察时间')
+                state = 'verified'
+            db.execute('''UPDATE interaction_review_handoffs SET state=?,reply_id=? WHERE
+                platform=? AND account=? AND channel_id=? AND comment_id=?''', (state, reply_id, *identity))
+        return self._result(batch_id, item, 'handoff_' + state,
+            '已在原对话独立读回本人回复（网页核验）' if state == 'verified' else
+            '发送结果待检查；保留原尝试，不重新发送', remote_id=reply_id)
 
 
 class ReviewServer(ThreadingHTTPServer):
