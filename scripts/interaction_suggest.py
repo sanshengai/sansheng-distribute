@@ -211,12 +211,10 @@ def show(root, key, *, include_text=False):
     return result
 
 
-def prepare_batch(root, platform, account, channel, index, config, *, limit=5, client=chat):
-    """Bounded drafting of pending items. Existing decisions do not consume the model budget."""
-    root = _safe_state_dir(root)
-    config = settings(config)
-    if platform not in PLATFORMS or type(limit) is not int or not 1 <= limit <= 20:
-        raise PublishError('批次平台或模型调用上限无效；上限须为 1 至 20')
+def validate_work_index(index, platform, account, channel):
+    """Validate handoff scope before starting a cycle or contacting a provider."""
+    if platform not in PLATFORMS:
+        raise PublishError('批次平台无效')
     _string(account, 'account', 256)
     _string(channel, 'channel', 256)
     if (not isinstance(index, dict) or set(index) != {'schema', 'works'}
@@ -231,6 +229,16 @@ def prepare_batch(root, platform, account, channel, index, config, *, limit=5, c
         if work['video_id'] in works:
             raise PublishError('作品索引中同一作品身份重复')
         works[work['video_id']] = work
+    return works
+
+
+def prepare_batch(root, platform, account, channel, index, config, *, limit=5, client=chat):
+    """Bounded drafting of pending items. Existing decisions do not consume the model budget."""
+    root = _safe_state_dir(root)
+    config = settings(config)
+    if type(limit) is not int or not 1 <= limit <= 20:
+        raise PublishError('批次模型调用上限须为 1 至 20')
+    works = validate_work_index(index, platform, account, channel)
     with _lock(root), open_db(root) as db:
         has_receipts = db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_reply_receipts'").fetchone()
         clause = ''' AND NOT EXISTS (SELECT 1 FROM interaction_reply_receipts r

@@ -69,6 +69,12 @@ def render(db_path, include_text=False, requested=()):
                 except PublishError:
                     value['current_source'] = False
                 suggestions[key] = value
+        cycle_runs, cycle_states = {}, {}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_draft_cycle_runs'").fetchone():
+            for row in db.execute('SELECT * FROM interaction_draft_cycle_runs ORDER BY started_at,rowid'):
+                cycle_runs[(row['platform'],row['account'],row['channel_id'])] = dict(row)
+            for row in db.execute('SELECT * FROM interaction_draft_cycle_state'):
+                cycle_states[(row['platform'],row['channel_id'])] = dict(row)
     by_source = {}
     for item in items:
         key = (item['platform'], item['account'], item['channel_id'])
@@ -115,6 +121,18 @@ def render(db_path, include_text=False, requested=()):
         if decisions:
             counts = {action: sum(d['action'] == action for d in decisions) for action in ('reply', 'review', 'skip')}
             note += f"；模型建议：拟回复 {counts['reply']}／转人工 {counts['review']}／建议跳过 {counts['skip']}（均待审）"
+        cycle = cycle_runs.get(key)
+        circuit = cycle_states.get((platform, src['channel_id']))
+        if cycle:
+            labels = {'prepared':'已整理', 'budget_limited':'本轮预算已到上限',
+                      'budget_exhausted':'今日预算已用完', 'waiting_for_sync':'等待近期成功同步',
+                      'circuit_open':'拟稿暂停', 'policy_changed':'策略已变化',
+                      'interrupted':'中断待检查', 'error':'拟稿失败', 'running':'拟稿中'}
+            note += ('；最近拟稿周期：' + labels.get(cycle['state'], '状态待核对')
+                     + '（' + local_time(cycle['finished_at'] or cycle['started_at']) + '）'
+                     + f"，本轮模型请求 {cycle['model_requests']} 次；拟稿不代表发送")
+        if circuit and circuit['reason']:
+            note += '；拟稿控制：' + circuit['reason']
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(src['account'])}</td>"
                     f"<td>{e(STATES.get(src['state'], '状态未知'))}</td><td>{len(pending)}</td>"
                     f"<td>{len(handled)}</td><td>{e(local_time(src['last_success_at']))}</td><td>{e(note)}</td></tr>")

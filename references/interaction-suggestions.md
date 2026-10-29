@@ -45,6 +45,8 @@ python3 scripts/interaction_suggest.py --state-dir /path/to/private-state batch 
 
 模型只返回 `action/category/text/reason`。`reply` 保存原有本地草稿；`review` 保存待判断建议，`skip` 保存跳过建议，两者都不会把原评论标记已处理。投诉、隐私、交易和版权类别强制转为 review；模型分类仍可能错误，不能据其分类自行取得发送资格。所有结果均保持 `needs_review=true/authorized=false/sent=false`，后续有限自动模式须另外实现和验收。
 
+周期检查新留言并拟稿时，按需读[周期拟稿](interaction-draft-cycle.md)：它增加近期成功同步校验、每轮与每日预算、持久暂停和有限观察；不把拟稿接成自动发送。
+
 ## 复用与恢复
 
 相同原评、作品、必要对话、覆盖警告及模型配置复用已有建议，不重复调用模型。空轮询只改变最近同步时间，不应使草稿缓存失效。作品或对话内容变化时不复用旧建议；已有作者草稿不覆盖，返回 existing_draft 供核对。每个账号的拟稿持有同机独占锁，不阻塞其他账号的正常同步。

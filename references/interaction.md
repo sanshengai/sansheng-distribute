@@ -44,7 +44,7 @@ python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<pr
 
 拟稿需要原作品和必要对话时，先按 [回复上下文](interaction-context.md) 生成有字符预算的私有输入。模块核对账号与作品身份，保留原评和必要父级；没有查全或只有人工导入时明确标记。它只整理数据，不调用模型、不授权、不发送。
 
-需要脚本生成建议并接入同一草稿队列时，按需读 [模型回复建议](interaction-suggestions.md)。只有显式启用的模型服务接收必要上下文，输出保持待审；不授予发送权限，也不会启动自动回复。
+需要脚本生成建议并接入同一草稿队列时，按需读 [模型回复建议](interaction-suggestions.md)；与已运行的评论巡检衔接时读 [周期拟稿](interaction-draft-cycle.md)。只有显式启用的模型服务接收必要上下文，输出保持待审；不授予发送权限，也不会启动自动回复。
 
 有真实评论 ID、已在收件箱中的网友评论，可通过 `scripts/interaction_drafts.py --state-dir <私有目录> prepare --platform <平台> --account <账号> --channel <频道ID> --comment <评论ID> --text-file <0600的回复文本文件>` 建立本地草稿。`list --include-text` 查看原评论与拟回复，默认 `list` 不输出正文；`withdraw --key <draft_key>` 只撤销本地草稿，不删除平台内容。每个原评论只保留一个候选，重复同文案去重，不同文案先核对再撤销旧稿。
 
