@@ -18,6 +18,8 @@
 
 公众号补充权限诊断（2026-10-29）：一个既有账号通过正式服务端凭据成功获取 token，但留言列表接口返回 `48001`。该次仅用空请求体诊断接口权限，未查询具体文章，因此不计留言覆盖或回复验收。当前凭据不能调用该接口；不应反复扫码或将草稿 API 可用当作留言权限可用。[留言列表官方文档](https://developers.weixin.qq.com/doc/subscription/api/leaving/api_listcomment.html)将“仅认证”限定为企业主体已认证账号，其他未明确声明类型不能据此认定可用。此结果只适用于该账号本次权限状态，不代表所有公众号均无评论 API；后续先核实账号主体与可申请权限，再用正式群发文章身份验收。
 
+B 站候选复核（2026-10-29）：[public-clis/bilibili-cli](https://github.com/public-clis/bilibili-cli) 固定审查 `dbe28551930df43b633baa52e9639832aeada967`，其包为 Apache-2.0，但依赖的 bilibili-api-python 元数据为 GPL-3.0-or-later。其所指向的 [Nemo2011/bilibili-api](https://github.com/Nemo2011/bilibili-api) 已归档，当前 README 声明停止维护及未获官方授权。当前 CLI 源码默认读取热门评论，不能据此认定增量、全部一级评论和子回复均已覆盖；[发送评论请求 #12](https://github.com/public-clis/bilibili-cli/issues/12) 仍为 open，[完整翻页请求 #18](https://github.com/public-clis/bilibili-cli/issues/18) 已关闭但固定源码没有对应 `--all-comments` 选项，不能以 Issue 关闭代替功能核验。未安装该候选、未复制其代码。现有账号登录的只读身份核对通过不代表评论接口验收；[官方开放平台目录](https://openhome.bilibili.com/doc)尚不足以证明普通账号评论接口可用，也不足以证明没有该接口。继续核实官方资格及获准的后台路线，不登记无人值守能力。
+
 ## 发现策略
 
 支付宝补充验收（2026-10-29）：恢复登录后在评论管理读到真实网友留言；针对其中一条回复，重新加载页面并展开同一评论的回复，核对作者及全文一致。该证据覆盖单账号网页回复真实网友，不代表 API、持续采集或统一账本自动更新已完成。页面未取得稳定评论 ID 时仅保留私有观察记录，不能编造 ID 入库。列表中的作者自评论和网友留言必须分别统计。
