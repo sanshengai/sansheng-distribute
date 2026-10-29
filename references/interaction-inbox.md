@@ -9,12 +9,19 @@
 ```sh
 python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state sync-youtube
 python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state status
+python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state monitor-status
 python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state list --include-text
 python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state mark --comment-id COMMENT_ID --status handled
 python3 scripts/interaction_inbox.py --profile /private/profile.json --account ACCOUNT --state-dir /private/state watch-youtube --interval-seconds 1800
 ```
 
 `watch-youtube` 是主动启动的前台只读轮询，默认每 30 分钟一次，最短 5 分钟，连续三轮全局失败会停下并记录错误；个别评论串不可访问会记为部分完成并轮转其他评论，不导致整个监控停止。Ctrl-C 停止。可用 `--cycles N` 限制轮数。它不会安装定时服务，进程或电脑关闭后不能持续运行，不代表已经部署到云端或具备全天候监控。
+
+每次主动轮询持有同一状态目录、同一账号频道的独占巡检锁。第二个巡检在读取 OAuth 或访问平台前拒绝，避免重复请求；此锁不覆盖另一台主机、另一目录或未接入该入口的旧进程。单次 `sync-youtube` 仍可用于明确的只读诊断，由收件箱锁串行保护；不能据此同时启动多台机器轮询。
+
+巡检在私有目录保存最新状态和 `interaction-watch-runs/<run_id>.json`，记录实际开始、结束、每类轮数、下次检查时间及最大轮次起始间隔，不含令牌或评论正文。`monitor-status` 不请求 OAuth 或平台，而是实际检查本机锁和时间：`lock_observed` 表示该锁目前被持有；`overdue` 表示已超预期检查时间；`stopped_unexpectedly` 表示记录仍在运行状态但锁已释放；`terminal` 表示有结束记录。PID 只是诊断信息，不能单独证明进程或平台健康。程序崩溃后重新启动会保留旧轮次记录，并将缺少终止回执的旧运行标为异常停止；不知道实际退出时间时不编造结束时间。
+
+这些证据只证明该本机进程的轮询经过，不证明 API 返回了所有评论、已自动拟稿或回复、电脑休眠期间仍检查，亦不证明云端接管。至少 24 小时的持续运行验收必须检查真实时间跨度、实际轮数、失败与补查以及检查间隔；不能把几秒钟内通过的模拟多轮测试算作真实一天。任何后台服务仍须按当前主机的受管方式另行配置并实际验证，本命令不会自动安装服务。
 
 `status` 默认仅给聚合数；`list` 默认不含正文，`--include-text` 才输出原文，必须留在私有环境。标记 `handled` 只是本机处理标记，不意味着曾回复或平台已确认；可设回 `new`。同步读取不会自动标记已处理。发送回复仍须使用原评论候选的准备、已有真实授权和独立读回流程；未知结果不能重发。
 

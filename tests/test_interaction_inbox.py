@@ -161,6 +161,23 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(result['cycles'],3)
         self.assertEqual(sleeps,[1800,1800])
         self.assertTrue(all(method=='GET' for method,_ in self.client.calls))
+        with patch('interaction_inbox.config', side_effect=AssertionError('monitor status must not resolve OAuth')):
+            monitor=run_cli(prefix+['monitor-status'])
+        self.assertEqual(monitor['state'],'failed')
+        self.assertEqual(monitor['error_cycles'],3)
+        self.assertFalse(monitor['lock_held'])
+
+    def test_duplicate_watch_is_rejected_before_token_or_platform(self):
+        from interaction_monitor import Monitor
+        profile = Path(self.temp.name)/'profile.json'
+        profile.write_text(json.dumps({'accounts':{'owner':{'platforms':['youtube'],
+            'public_identities':{'youtube':CHANNEL},'youtube_token_env':'TEST_YOUTUBE_TOKEN'}}}))
+        prefix=['--profile',str(profile),'--account','owner','--state-dir',str(self.root)]
+        with Monitor(self.root,'youtube','owner',CHANNEL,interval=1800,cycles=1) as owner:
+            with patch('interaction_inbox.config', side_effect=AssertionError('duplicate reached OAuth')):
+                with self.assertRaises(PublishError):
+                    run_cli(prefix+['watch-youtube','--cycles','1'],client_factory=lambda _:self.fail('duplicate reached API'))
+            owner.finish('completed','test_done')
     def test_watch_continues_with_inaccessible_parent(self):
         profile=Path(self.temp.name)/'profile.json'
         profile.write_text(json.dumps({'accounts':{'owner':{'platforms':['youtube'],
@@ -173,6 +190,9 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(result['state'],'partial')
         self.assertEqual(result['cycles'],4)
         self.assertEqual(len(sleeps),3)
+        monitor=run_cli(prefix+['monitor-status'])
+        self.assertEqual(monitor['state'],'completed')
+        self.assertEqual(monitor['partial_cycles'],4)
         with open_db(self.root) as db:
             self.assertIsNotNone(db.execute("SELECT last_complete_scan_at FROM interaction_parents WHERE parent_id='b'").fetchone()[0])
 

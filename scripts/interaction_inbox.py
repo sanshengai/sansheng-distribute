@@ -285,6 +285,7 @@ def run_cli(argv=None, *, client_factory=APIClient, sleep_fn=time.sleep):
     watch.add_argument('--cycles',type=int,default=0,help='0 表示持续运行；正数表示运行的轮数')
     watch.add_argument('--notify-macos', action='store_true', help='同步后按需请求 macOS 汇总通知；默认关闭')
     sub.add_parser('status')
+    sub.add_parser('monitor-status', help='只读检查同机巡检锁、时间及轮次；不请求 OAuth 或平台')
     listing = sub.add_parser('list'); listing.add_argument('--include-text', action='store_true')
     mark = sub.add_parser('mark'); mark.add_argument('--comment-id', required=True); mark.add_argument('--status', required=True, choices=['new','handled'])
     sub.add_parser('reset-cursors', help='分页令牌失效时从头扫描；保留已发现评论和处理状态')
@@ -292,6 +293,9 @@ def run_cli(argv=None, *, client_factory=APIClient, sleep_fn=time.sleep):
     profile = load_profile(args.profile)
     channel = _account_channel(profile, args.account)
     root = _private_dir(args.state_dir)
+    if args.action == 'monitor-status':
+        from interaction_monitor import status as monitor_status
+        return monitor_status(root, 'youtube', args.account, channel)
     if args.action in {'sync-youtube','watch-youtube'}:
         if args.action == 'watch-youtube' and (args.interval_seconds < 300 or args.cycles < 0):
             raise PublishError('轮询间隔至少 300 秒，轮数不能为负')
@@ -309,37 +313,44 @@ def run_cli(argv=None, *, client_factory=APIClient, sleep_fn=time.sleep):
             return sync_youtube(client_factory(token),root,args.account,channel,**opts)
         if args.action == 'sync-youtube':
             return one_sync()
-        failures = cycles = 0
-        while not args.cycles or cycles < args.cycles:
-            try:
-                result = one_sync()
-                # One inaccessible old thread is a partial scan, not a global
-                # authentication/network failure. Rotate and keep monitoring.
-                failures = 0
-                if args.notify_macos:
-                    try:
-                        from interaction_notify import check as check_notification
-                        result['notification'] = check_notification(root, notify=True)['notification']
-                    except (PublishError, OSError, sqlite3.Error):
-                        # A notification failure must not stop comment discovery.
-                        result['notification'] = 'error'
-            except PublishError:
-                result = {'state':'error','error':'同步失败，详情见本机状态'}
-                failures += 1
-            cycles += 1
-            print(json.dumps({'cycle':cycles,**result},ensure_ascii=False),flush=True)
-            if failures >= 3:
-                stopped = {'state':'error','reason':'连续三次同步失败，已停止','cycles':cycles}
-                if args.notify_macos:
-                    try:
-                        from interaction_notify import notify_monitor_stopped
-                        stopped['notification'] = notify_monitor_stopped()
-                    except (PublishError, OSError, sqlite3.Error):
-                        stopped['notification'] = 'error'
-                return stopped
-            if args.cycles and cycles >= args.cycles:
-                return {'state':result['state'],'cycles':cycles}
-            sleep_fn(args.interval_seconds)
+        from interaction_monitor import Monitor
+        with Monitor(root, 'youtube', args.account, channel,
+                     interval=args.interval_seconds, cycles=args.cycles) as monitor:
+            failures = cycles = 0
+            while not args.cycles or cycles < args.cycles:
+                monitor.begin_cycle()
+                try:
+                    result = one_sync()
+                    # One inaccessible old thread is partial, not a global failure.
+                    failures = 0
+                    if args.notify_macos:
+                        try:
+                            from interaction_notify import check as check_notification
+                            result['notification'] = check_notification(root, notify=True)['notification']
+                        except (PublishError, OSError, sqlite3.Error):
+                            result['notification'] = 'error'
+                except PublishError:
+                    result = {'state':'error','error':'同步失败，详情见本机状态'}
+                    failures += 1
+                cycles += 1
+                monitor.record_cycle(result['state'])
+                print(json.dumps({'cycle':cycles, 'monitor_run_id':monitor.data['run_id'],
+                                  **result},ensure_ascii=False),flush=True)
+                if failures >= 3:
+                    stopped = {'state':'error','reason':'连续三次同步失败，已停止','cycles':cycles}
+                    if args.notify_macos:
+                        try:
+                            from interaction_notify import notify_monitor_stopped
+                            stopped['notification'] = notify_monitor_stopped()
+                        except (PublishError, OSError, sqlite3.Error):
+                            stopped['notification'] = 'error'
+                    monitor.finish('failed', 'consecutive_sync_errors')
+                    return stopped
+                if args.cycles and cycles >= args.cycles:
+                    monitor.finish('completed', 'cycle_limit_reached')
+                    return {'state':result['state'],'cycles':cycles}
+                monitor.sleep()
+                sleep_fn(args.interval_seconds)
     with _lock(root), open_db(root) as db:
         where = ('youtube',args.account,channel)
         if args.action == 'reset-cursors':
