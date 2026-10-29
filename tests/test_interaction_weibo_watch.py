@@ -74,6 +74,12 @@ class WeiboWatchTests(unittest.TestCase):
         self.assertTrue(all(r['notification'] == 'error' for r in self.rows))
         self.assertNotIn('SECRET', str(self.rows))
 
+    def test_output_failure_counts_one_failed_round_instead_of_two_rounds(self):
+        result = self.watch(cycles=1, emit=Mock(side_effect=BrokenPipeError()))
+        saved = self.status()
+        self.assertEqual((result['state'], saved['cycles'], saved['partial_cycles'], saved['error_cycles']),
+                         ('error', 1, 0, 1))
+
     def test_error_stops_without_retry_or_copying_secret(self):
         self.sync.side_effect = PublishError('secret-from-transport')
         result = self.watch()

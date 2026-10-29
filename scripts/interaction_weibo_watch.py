@@ -72,13 +72,13 @@ def watch(root, load_config, *, interval=1800, cycles=1, sync_fn=sync,
                       **{k: result[k] for k in ('returned_rows', 'distinct_comments', 'new_local_candidates')},
                       'scope': 'bounded_received_and_configured_works', 'social_writes': 0,
                       'canonical_imports': 0, 'send_enabled': False}
-                monitor.record_cycle('partial')
                 if notify:
                     try:
                         row['notification'] = notify_fn(root, notify=True)['notification']
                     except Exception:
                         row['notification'] = 'error'
                 emit(row)
+                monitor.record_cycle('partial')
             except Exception:
                 monitor.record_cycle('error'); monitor.finish('failed', 'reader_cycle_error')
                 return {'state': 'error', 'cycles': n, 'social_writes': 0,
