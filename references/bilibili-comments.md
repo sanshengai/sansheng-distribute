@@ -44,3 +44,31 @@ python3 scripts/bilibili_comments_candidate.py --config /private/bilibili-commen
 另行授权的私有自评论试点曾收到 `code=0`、成功提示与稳定评论 ID，但随后两次独立列表查询未出现该 ID。保留为“已受理、可见性未确认”，不重复发送，也未继续子回复；不能凭成功提示把回复计入已核验。原因尚未确定，不能直接归为审核拒绝。已知写入与列表证据不一致时，应保留提示并只读核查，不用空列表推断这次写入不存在。
 
 该版本 CLI 的 reply 把 root 与 parent 同设为输入的 rpid。未来接统一发送器时，须分别保存根评论与直接父级，先核对当前原文和账号；一级评论试验不能代替楼中楼验收。[上游需求及作者实测](https://github.com/biliup/biliup/issues/1627)可作路线线索，不能代替当前账号的独立读回。
+
+## 只读核验已知评论
+
+遇到已有评论 ID、列表却未出现时，使用 `scripts/bilibili_comment_readback.py`。它沿用上述私有配置，先核对登录、作品与作者，查询指定根评论及子回复；正常可见目标还须在一级列表确认根评论。每类查询最多 `--max-pages` 页（1 至 10，默认 3），超出预算仍未找到即保持未确认。不会调用已弃用的 `/reply/info`，也不发送、授权、重试或认领原发送回执。
+
+目标文件须为 `0600` 私有 JSON。一级评论的 root_id 和 parent_id 均为 `"0"`；子回复分别填真实根评论 ID 与直接父级 ID，不能用子回复自身替代根评论：
+
+```json
+{
+  "schema": "bilibili-comment-probe.v1",
+  "account": "creator",
+  "uid": "123456",
+  "aid": "987654321",
+  "bvid": "BV1AA411A7gJ",
+  "comment_id": "123456789",
+  "root_id": "0",
+  "parent_id": "0",
+  "text": "封存的原发送正文"
+}
+```
+
+```sh
+python3 scripts/bilibili_comment_readback.py --config /private/bilibili-comments.json --probe /private/comment-probe.json --state-dir /private/interaction-state
+```
+
+退出 `0` 表示目标、正文、父级、平台正常可见状态及根评论列表已读回，范围只限本次目标；退出 `3` 表示受限或未确认，`2` 表示配置、身份或查询错误。证据以新的 `0600` 文件保留，原尝试和回执不改写。任何结果都不自动允许重发。
+
+当前真实自评论按 ID 读回后，平台返回 `state=17`，正文和作者吻合，列表未出现。社区[评论对象资料](https://github.com/pskdje/bilibili-API-collect/blob/master/docs/comment/readme.md)将该状态标为受限可见；这里只据实际状态判为 `restricted`，不猜平台采取该状态的原因。正常可见目标及非空子回复分页当前经离线验收，不能据此视为真实发送已验收。该社区资料仓已归档，不是官方接口承诺。
