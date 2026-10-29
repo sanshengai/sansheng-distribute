@@ -104,7 +104,10 @@ def render(db_path, include_text=False, requested=()):
         if baseline_count:
             note += f'；历史基线 {baseline_count} 条（不自动拟稿，不计已回复）'
         if (platform, src['account']) in latest_observations:
-            note += '；另有网页观察，详见折叠记录（不并入同步计数）'
+            observation = latest_observations[(platform, src['account'])]
+            note += ('；网页补充（' + local_time(observation['observed_at']) + '）：'
+                     + observation['reason'] + '；下一步：' + observation['next_action']
+                     + '（不并入同步计数，范围详见折叠记录）')
         if unknown:
             note += f'；其他状态 {unknown}'
         decisions = [json.loads(suggestions[(*key, x['comment_id'])]['decision_json']) for x in pending
