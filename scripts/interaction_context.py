@@ -90,6 +90,13 @@ def prepare(root, platform, account, channel, comment, content, *, max_chars=240
                 (platform, account, channel, comment)).fetchone() is not None
         scan = db.execute('''SELECT state,last_success_at FROM interaction_sources
             WHERE platform=? AND account=? AND channel_id=?''', (platform, account, channel)).fetchone()
+        monitor_scope = None
+        if platform == 'bilibili' and db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_bilibili_scope'").fetchone():
+            scope = db.execute('SELECT video_ids FROM interaction_bilibili_scope WHERE account=? AND channel_id=?',
+                               (account, channel)).fetchone()
+            if scope:
+                monitor_scope = {'kind': 'configured_works', 'official_api': False,
+                                 'work_in_scope': target['video_id'] in json.loads(scope[0])}
 
     selected = [_comment(parent)] if parent else []
     seen = {comment, *([parent['comment_id']] if parent else [])}
@@ -108,6 +115,10 @@ def prepare(root, platform, account, channel, comment, content, *, max_chars=240
         warnings.append('manual_import_not_platform_sync')
     elif scan is None or scan['state'] != 'complete':
         warnings.append('platform_coverage_unconfirmed')
+    if monitor_scope:
+        warnings.append('unofficial_platform_read')
+        if not monitor_scope['work_in_scope']:
+            warnings.append('work_outside_current_monitor_scope')
     packet = {
         'schema': 'reply-context.v1', 'operation': 'draft_only', 'may_send': False,
         'source_digest': fingerprint,
@@ -119,6 +130,8 @@ def prepare(root, platform, account, channel, comment, content, *, max_chars=240
                        'is_live_read': False},
         'warnings': warnings, 'guidance': list(GUIDANCE),
     }
+    if monitor_scope:
+        packet['provenance']['monitor_scope'] = monitor_scope
     # Drop optional neighbors first. Never silently trim the target, parent or work.
     minimum = 1 if parent else 0
     # Reserve room for the final digest field as part of the returned budget.

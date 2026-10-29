@@ -48,6 +48,9 @@ def render(db_path, include_text=False, requested=()):
         replied = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,parent_id FROM interaction_reply_receipts')} if has_receipts else set()
         has_provenance = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_manual_provenance'").fetchone()
         manual = {tuple(r) for r in db.execute('SELECT platform,account,channel_id,comment_id FROM interaction_manual_provenance')} if has_provenance else set()
+        has_baselines = db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_bilibili_baselines'").fetchone()
+        baselines = {('bilibili',r['account'],r['channel_id'],r['comment_id']) for r in
+                     db.execute('SELECT * FROM interaction_bilibili_baselines')} if has_baselines else set()
         has_observations = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_observations'").fetchone()
         observations = [json.loads(r[0]) for r in db.execute('SELECT document FROM interaction_observations ORDER BY observed_at, recorded_at')] if has_observations else []
         has_drafts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_drafts'").fetchone()
@@ -73,6 +76,10 @@ def render(db_path, include_text=False, requested=()):
     rows = []
     details = []
     seen_platforms = set()
+    source_accounts = {(s['platform'], s['account']) for s in sources}
+    latest_observations = {}
+    for observation in observations:
+        latest_observations[(observation['platform'], observation['account'])] = observation
     for src in sorted(sources, key=lambda x: (x['platform'], x['account'], x['channel_id'])):
         platform = src['platform']
         seen_platforms.add(platform)
@@ -80,7 +87,8 @@ def render(db_path, include_text=False, requested=()):
         incoming = [x for x in by_source.get(key, []) if not x['is_own']]
         verified = [x for x in incoming if (*key, x['comment_id']) in replied]
         pending = [x for x in incoming if x['local_status'] == 'new' and (*key, x['comment_id']) not in replied]
-        handled = [x for x in incoming if x['local_status'] == 'handled']
+        baseline_count = sum((*key, x['comment_id']) in baselines for x in incoming)
+        handled = [x for x in incoming if x['local_status'] == 'handled' and (*key, x['comment_id']) not in baselines]
         unknown = sum(x['local_status'] not in ('new', 'handled') for x in incoming)
         manual_count = sum((*key, x['comment_id']) in manual for x in incoming)
         if src['state'] == 'manual':
@@ -93,6 +101,10 @@ def render(db_path, include_text=False, requested=()):
         note += f'；平台已核验回复 {len(verified)} 条（历史回执）'
         if manual_count:
             note += f'；含人工导入 {manual_count} 条'
+        if baseline_count:
+            note += f'；历史基线 {baseline_count} 条（不自动拟稿，不计已回复）'
+        if (platform, src['account']) in latest_observations:
+            note += '；另有网页观察，详见折叠记录（不并入同步计数）'
         if unknown:
             note += f'；其他状态 {unknown}'
         decisions = [json.loads(suggestions[(*key, x['comment_id'])]['decision_json']) for x in pending
@@ -114,14 +126,17 @@ def render(db_path, include_text=False, requested=()):
                 origin = ' · 人工导入' if (*key, item['comment_id']) in manual else ''
                 details.append(f"<li><b>{e(PLATFORMS.get(platform, platform))} · {e(item['author_name'] or '未显示昵称')}{origin}</b>"
                                f" <span>{e(local_time(item['published_at']))}</span><p>{e(item['body'])}</p>{link}</li>")
-    # Separate evidence lane: never count browser observations as API inbox items.
-    latest = {}
-    for observation in observations:
-        latest[(observation['platform'], observation['account'])] = observation
+    # Keep evidence types separate without repeating an account in the summary.
+    observation_notes = []
     labels = {'observed': '网页已检查', 'partial': '网页部分检查', 'blocked': '受阻', 'paused': '暂停', 'unavailable': '当前不可用'}
-    for (platform, account), observation in sorted(latest.items()):
+    for (platform, account), observation in sorted(latest_observations.items()):
         seen_platforms.add(platform)
         note = '范围：' + observation['scope'] + '；原因：' + observation['reason'] + '；下一步：' + observation['next_action']
+        if (platform, account) in source_accounts:
+            observation_notes.append(f"<li><b>{e(PLATFORMS.get(platform,platform))} · {e(account)}</b>"
+                                     f" · {e(labels[observation['state']])} · {e(local_time(observation['observed_at']))}"
+                                     f"<p>{e(note)}</p></li>")
+            continue
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(account)}</td>"
                     f"<td>{e(labels[observation['state']])}</td><td>未统计</td><td>另见网页记录</td>"
                     f"<td>{e(local_time(observation['observed_at']))}（观察）</td><td>{e(note)}</td></tr>")
@@ -141,6 +156,8 @@ def render(db_path, include_text=False, requested=()):
     detail_section = ''
     if include_text:
         detail_section = '<details><summary>查看待处理评论</summary><ul>' + (''.join(details) or '<li>当前记录中没有待处理评论。</li>') + '</ul></details>'
+    if observation_notes:
+        detail_section += '<details><summary>查看同账号网页观察（与同步分开记账）</summary><ul>' + ''.join(observation_notes) + '</ul></details>'
     if observation_details:
         detail_section += '<details><summary>查看网页回复历史（不计入自动同步）</summary><ul>' + ''.join(observation_details) + '</ul></details>'
     if suggestions:
