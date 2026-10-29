@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from interaction_drafts import source as draft_source
 from publish_core import PublishError
 from weibo_official_inbox import overview as weibo_overview
+from interaction_monitor import snapshot as monitor_snapshot
 
 PLATFORMS = {'youtube': 'YouTube', 'x': 'X', 'weibo': '微博', 'bilibili': 'B 站',
              'douyin': '抖音', 'wechat': '公众号', 'wechat_channels': '微信视频号',
@@ -51,7 +52,38 @@ def weibo_read_note(value):
             + stale + '不代表全量覆盖或当前可回复；补查父级和可见性后再拟稿，不自动发送')
 
 
+def watch_note(root, platform, account, channel):
+    parts = []
+    monitors = [(platform, '读取巡检')]
+    if platform == 'youtube':
+        monitors.append(('draft-youtube', '拟稿观察'))
+    for kind, title in monitors:
+        try:
+            value = monitor_snapshot(root, kind, account, channel)
+        except (PublishError, OSError, ValueError, TypeError):
+            parts.append(title + '记录无法核验')
+            continue
+        if value['state'] == 'not_started' and not value['lock_held']:
+            continue
+        health = value['health']
+        label = ({'running': '执行中', 'sleeping': '等待下轮'}.get(value['state'], '状态待核验')
+                 if health == 'lock_observed' else
+                 {'overdue': '检查超时', 'stopped_unexpectedly': '意外停止',
+                  'terminal': {'completed': '有限观察已结束', 'failed': '失败已停止',
+                               'stopped': '已停止'}.get(value['state'], '状态待核验')}.get(health, '状态待核验'))
+        note = title + '：' + label
+        if 'cycles' in value:
+            note += f"，{value['cycles']}/{value['requested_cycles']} 轮，失败 {value['error_cycles']}"
+            if value['partial_cycles']:
+                note += f"，部分覆盖 {value['partial_cycles']}"
+            if health == 'lock_observed' and value['next_due_at']:
+                note += '，下次 ' + local_time(value['next_due_at'])
+        parts.append(note)
+    return ('；' + '；'.join(parts)) if parts else ''
+
+
 def render(db_path, include_text=False, requested=()):
+    state_root = Path(db_path).resolve(strict=True).parent
     uri = Path(db_path).resolve(strict=True).as_uri() + '?mode=ro'
     with closing(sqlite3.connect(uri, uri=True)) as db:
         db.row_factory = sqlite3.Row
@@ -155,6 +187,7 @@ def render(db_path, include_text=False, requested=()):
             note += '；拟稿控制：' + circuit['reason']
         if official:
             note += '；' + weibo_read_note(official)
+        note += watch_note(state_root, platform, src['account'], src['channel_id'])
         pending_display = str(len(pending)) + (f"；待补上下文 {official['needs_context']}" if official else '')
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(src['account'])}</td>"
                     f"<td>{e(weibo_read_label(official) if official else STATES.get(src['state'], '状态未知'))}</td><td>{e(pending_display)}</td>"
@@ -184,6 +217,7 @@ def render(db_path, include_text=False, requested=()):
         official = weibo_reads.get(account) if platform == 'weibo' else None
         if official:
             note += '；' + weibo_read_note(official)
+            note += watch_note(state_root, 'weibo', account, official['uid'])
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(account)}</td>"
                     f"<td>{e(weibo_read_label(official) if official else labels[observation['state']])}</td>"
                     f"<td>{e('待补上下文 ' + str(official['needs_context']) if official else '未统计')}</td><td>另见网页记录</td>"
@@ -193,7 +227,7 @@ def render(db_path, include_text=False, requested=()):
         if ('weibo', account) not in source_accounts and ('weibo', account) not in latest_observations:
             rows.append(f"<tr><td>微博</td><td>{e(account)}</td><td>{e(weibo_read_label(official))}</td>"
                         f"<td>待补上下文 {official['needs_context']}</td><td>未统计</td>"
-                        f"<td>{e(local_time(official['last_success_at']))}</td><td>{e(weibo_read_note(official))}</td></tr>")
+                        f"<td>{e(local_time(official['last_success_at']))}</td><td>{e(weibo_read_note(official) + watch_note(state_root, 'weibo', account, official['uid']))}</td></tr>")
         if include_text:
             for item in official['pending']:
                 views = json.loads(item['views_json'])
@@ -253,8 +287,8 @@ def render(db_path, include_text=False, requested=()):
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>互动收件箱</title><style>body{{font:14px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#163b3d;background:#f2f7f5;margin:0;padding:28px}}main{{max-width:1200px;margin:auto}}h1{{font-size:24px;margin:0 0 8px}}p.note{{color:#526d6d;line-height:1.6}}.box{{overflow-x:auto;background:white;border:1px solid #d8e7e1;border-radius:10px}}table{{width:100%;border-collapse:collapse;min-width:760px}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #e5efeb;vertical-align:top}}th{{color:#526d6d;font-weight:600}}td:last-child{{max-width:400px;overflow-wrap:anywhere}}details{{margin-top:20px}}li{{padding:10px;border-bottom:1px solid #d8e7e1}}li p{{white-space:pre-wrap}}li span{{color:#526d6d}}</style></head><body><main>
 <h1>互动收件箱</h1><p class="note">本地快照 · 北京时间 {e(stamp)}。数字只代表已获取并保留的记录；检查不完整、失败或无同步记录时，不能判断平台没有新评论。</p>
-<div class="box"><table><thead><tr><th>平台</th><th>账号</th><th>检查状态</th><th>待处理</th><th>已处理</th><th>最近完整同步／网页观察</th><th>覆盖情况与原因</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>{detail_section}
-<p class="note">此页面不会实时更新，也不会发送回复。评论及账号资料属于私有信息，请保存在私人位置。</p></main></body></html>'''
+<div class="box"><table><thead><tr><th>平台</th><th>账号</th><th>检查状态</th><th>待处理</th><th>已处理</th><th>最近成功读取／观察</th><th>覆盖情况与原因</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>{detail_section}
+<p class="note">此页面不会实时更新，也不会发送回复。巡检运行状态来自生成时的本机锁与时间检查，不代表平台全量覆盖。评论及账号资料属于私有信息，请保存在私人位置。</p></main></body></html>'''
 
 
 def main():

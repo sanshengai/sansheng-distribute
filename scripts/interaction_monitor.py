@@ -32,10 +32,19 @@ def _time(value):
         raise PublishError('巡检记录时间无效') from exc
 
 
-def _paths(root, platform, account, channel):
+def _paths(root, platform, account, channel, *, create=True):
     if any(not isinstance(v, str) or not v or len(v) > 256 for v in (platform, account, channel)):
         raise PublishError('巡检账号身份无效')
-    root = _private_dir(root)
+    if create:
+        root = _private_dir(root)
+    else:
+        root = Path(root)
+        if not root.is_absolute() or root.is_symlink():
+            raise PublishError('巡检状态目录须为本机绝对路径')
+        if root.exists():
+            info = root.stat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise PublishError('巡检状态目录权限或类型无效')
     key = digest({'platform': platform, 'account': account, 'channel_id': channel})
     return root, root / ('interaction-watch-' + key + '.lock'), root / ('interaction-watch-' + key + '.json')
 
@@ -185,15 +194,7 @@ class Monitor:
             self.file = None
 
 
-def status(root, platform, account, channel, *, clock=None):
-    _, lock_path, path = _paths(root, platform, account, channel)
-    with _open_lock(lock_path) as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            held = False
-        except BlockingIOError:
-            held = True
-        data = _read(path)
+def _status_value(data, platform, account, channel, held, clock):
     if data is None:
         return {'state': 'not_started', 'lock_held': held, 'health': 'unknown' if held else 'not_running'}
     if any(data.get(k) != v for k, v in dict(platform=platform, account=account, channel_id=channel).items()):
@@ -210,3 +211,36 @@ def status(root, platform, account, channel, *, clock=None):
             'elapsed_seconds': max(0.0, (_time(data['finished_at']) if data['finished_at'] else current
                                         ).timestamp() - _time(data['started_at']).timestamp()),
             'note': '同机锁和时间证据，不证明平台全覆盖、模型拟稿、发送或云端全天在线'}
+
+
+def status(root, platform, account, channel, *, clock=None):
+    _, lock_path, path = _paths(root, platform, account, channel)
+    with _open_lock(lock_path) as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held = False
+        except BlockingIOError:
+            held = True
+        data = _read(path)
+    return _status_value(data, platform, account, channel, held, clock)
+
+
+def snapshot(root, platform, account, channel, *, clock=None):
+    """Read existing evidence/lock only; dashboard rendering must not create files."""
+    _, lock_path, path = _paths(root, platform, account, channel, create=False)
+    held = False
+    try:
+        fd = os.open(lock_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except FileNotFoundError:
+        data = _read(path)
+    else:
+        with os.fdopen(fd, 'rb') as lock:
+            info = os.fstat(lock.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise PublishError('巡检锁文件权限或类型无效')
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                held = True
+            data = _read(path)
+    return _status_value(data, platform, account, channel, held, clock)

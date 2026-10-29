@@ -22,7 +22,7 @@ X 的[官方提及只读候选](x-mentions-candidate.md)仅经离线验证，可
 python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<private-output.html>' --include-text --platform youtube --platform x --platform weibo --platform bilibili --platform douyin --platform wechat_channels --platform wechat --platform alipay --platform xiaohongshu
 ```
 
-看板是生成时的本地快照，每个账号一行，显示已检查、部分覆盖、失败或无同步记录、待处理数量和原因。`--include-text` 会把评论原文放入私有 HTML；不传则页面不包含评论原文。看板不联网，不发送回复，不覆盖已有文件，也不能写进 Skill 公开仓。首次未同步的其他平台显示“无同步记录”，不是零评论。
+看板是生成时的本地快照，每个账号一行，显示已检查、部分覆盖、失败或无同步记录、待处理数量和原因。已有巡检时只读检查运行记录及本机锁，显示实际轮数、等待下轮、超时或意外停止；YouTube 的拟稿观察另列。旧成功时间不代表进程仍在运行，运行也不证明平台全量覆盖。`--include-text` 会把评论原文放入私有 HTML；不传则页面不包含评论原文。看板不联网、不创建巡检锁、不发送回复、不覆盖已有文件，也不能写进 Skill 公开仓。首次未同步的其他平台显示“无同步记录”，不是零评论。
 
 查询详情可能包含网友的原话和名称，展示时仅提供用户需要的信息，不把私有记录放进 Git。读取错误与空结果要分开，删除或看不到的评论不能仅凭缓存推定仍公开。
 

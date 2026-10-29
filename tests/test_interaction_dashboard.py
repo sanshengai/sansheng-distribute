@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'interaction_dashboard.py'
 spec = importlib.util.spec_from_file_location('interaction_dashboard', SCRIPT)
@@ -12,6 +14,38 @@ spec.loader.exec_module(dashboard)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_watch_health_includes_drafts_without_creating_missing_records(self):
+        from interaction_monitor import Monitor
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.assertEqual(dashboard.watch_note(root, 'youtube', 'owner', 'channel'), '')
+            self.assertEqual(list(root.iterdir()), [])
+            with Monitor(root, 'youtube', 'owner', 'channel', interval=1800, cycles=3) as run:
+                run.begin_cycle(); run.record_cycle('partial'); run.sleep()
+                note = dashboard.watch_note(root, 'youtube', 'owner', 'channel')
+                self.assertIn('等待下轮', note); self.assertIn('1/3 轮', note)
+                self.assertIn('部分覆盖 1', note); self.assertIn('下次', note)
+                run.finish('completed', 'test_done')
+            self.assertIn('有限观察已结束', dashboard.watch_note(root, 'youtube', 'owner', 'channel'))
+            with Monitor(root, 'draft-youtube', 'owner', 'channel', interval=1800, cycles=1) as draft:
+                draft.finish('failed', 'test_failure')
+            self.assertIn('拟稿观察：失败已停止', dashboard.watch_note(root, 'youtube', 'owner', 'channel'))
+
+    def test_watch_health_distinguishes_overdue_stopped_and_corrupt_records(self):
+        from interaction_monitor import Monitor, snapshot
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); stamp = datetime.now(timezone.utc)
+            run = Monitor(root, 'weibo', 'owner', '101', interval=1800, cycles=2, clock=lambda: stamp).__enter__()
+            try:
+                run.begin_cycle(); run.sleep()
+                with patch.object(dashboard, 'monitor_snapshot', side_effect=lambda *a: snapshot(*a, clock=lambda: stamp + timedelta(seconds=2200))):
+                    self.assertIn('检查超时', dashboard.watch_note(root, 'weibo', 'owner', '101'))
+            finally:
+                run.file.close(); run.file = None
+            self.assertIn('意外停止', dashboard.watch_note(root, 'weibo', 'owner', '101'))
+            run.path.write_text('{}'); run.path.chmod(0o600)
+            self.assertIn('记录无法核验', dashboard.watch_note(root, 'weibo', 'owner', '101'))
+
     def test_partial_is_not_zero_and_comment_text_is_escaped(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'inbox.sqlite3'

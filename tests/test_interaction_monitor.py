@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from interaction_monitor import Monitor, status
+from interaction_monitor import Monitor, status, snapshot
 from publish_core import PublishError, write_json
 
 
@@ -111,6 +111,51 @@ except PublishError:
                 with self.assertRaises(PublishError): self.check()
         path.write_text('{'); path.chmod(0o600)
         with self.assertRaises(PublishError): self.check()
+
+    def peek(self):
+        return snapshot(self.root, 'youtube', 'owner', 'channel', clock=lambda: self.stamp)
+
+    def test_readonly_snapshot_does_not_create_directory_or_lock_for_empty_input(self):
+        before = list(self.root.iterdir())
+        self.assertEqual(self.peek()['state'], 'not_started')
+        self.assertEqual(list(self.root.iterdir()), before)
+        self.root = self.root / 'missing'
+        self.assertEqual(self.peek()['state'], 'not_started')
+        self.assertFalse(self.root.exists())
+
+    def test_readonly_snapshot_checks_actual_lock_overdue_and_stopped_without_writes(self):
+        run = self.monitor().__enter__()
+        try:
+            run.begin_cycle(); run.record_cycle('partial'); run.sleep()
+            before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+            self.assertEqual(self.peek()['health'], 'lock_observed')
+            self.stamp += timedelta(seconds=2200)
+            self.assertEqual(self.peek()['health'], 'overdue')
+            self.assertEqual({p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}, before)
+        finally:
+            run.file.close(); run.file = None
+        self.assertEqual(self.peek()['health'], 'stopped_unexpectedly')
+        run.lock_path.unlink()
+        self.assertEqual(self.peek()['health'], 'stopped_unexpectedly')
+        self.assertFalse(run.lock_path.exists())
+
+    def test_readonly_snapshot_rejects_empty_corrupt_or_wrong_identity_evidence(self):
+        with self.monitor() as run:
+            run.finish('completed', 'test_done')
+        for changed in ({}, dict(run.data, account='wrong'), dict(run.data, cycles=1)):
+            with self.subTest(changed=changed):
+                write_json(run.path, changed)
+                with self.assertRaises(PublishError): self.peek()
+
+    def test_readonly_snapshot_rejects_symlink_lock_or_public_state(self):
+        with self.monitor() as run:
+            run.finish('completed', 'test_done')
+        run.lock_path.unlink()
+        run.lock_path.symlink_to(run.path)
+        with self.assertRaises(OSError): self.peek()
+        run.lock_path.unlink()
+        self.root.chmod(0o755)
+        with self.assertRaises(PublishError): self.peek()
 
 
 if __name__ == '__main__':
