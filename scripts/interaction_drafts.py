@@ -31,13 +31,15 @@ def source(db, platform, account, channel, comment):
     return dict(row), digest(identity)
 
 
-def prepare(root, platform, account, channel, comment, reply):
+def prepare(root, platform, account, channel, comment, reply, *, expected_source=None):
     if platform not in PLATFORMS:
         raise PublishError('不支持的平台')
     reply = _string(reply, 'reply', 10000)
     root = _safe_state_dir(root)
     with _lock(root), open_db(root) as db:
         row, snapshot = source(db,platform,account,channel,comment)
+        if expected_source is not None and snapshot != expected_source:
+            raise PublishError('原评论已变化，不能将旧模型结果绑定到新原文')
         db.execute(SCHEMA)
         key = digest({'source':snapshot,'reply':reply})
         old = db.execute('''SELECT draft_key FROM interaction_drafts WHERE platform=? AND account=?

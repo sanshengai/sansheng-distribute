@@ -128,7 +128,11 @@ def prepare(root, platform, account, channel, comment, content, *, max_chars=240
             warnings.append('conversation_truncated')
     if len(json.dumps(packet, ensure_ascii=False)) + 96 > max_chars:
         raise PublishError('原评、必要父级与作品摘要超出预算；先缩短作品摘要，不截断原评论')
-    packet['context_key'] = digest(packet)
+    # A successful empty poll changes last_success_at, not the conversation.
+    # Cache by actual drafting inputs instead of invalidating every polling cycle.
+    semantic = {k: v for k, v in packet.items() if k != 'provenance'}
+    semantic['origin'] = origin
+    packet['context_key'] = digest(semantic)
     return packet
 
 

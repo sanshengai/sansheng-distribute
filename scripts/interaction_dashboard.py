@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from interaction_drafts import source as draft_source
+from publish_core import PublishError
+
 PLATFORMS = {'youtube': 'YouTube', 'x': 'X', 'weibo': '微博', 'bilibili': 'B 站',
              'douyin': '抖音', 'wechat': '公众号', 'wechat_channels': '微信视频号',
              'alipay': '支付宝生活号', 'xiaohongshu': '小红书'}
@@ -51,6 +54,18 @@ def render(db_path, include_text=False, requested=()):
         drafts = [dict(r) for r in db.execute('SELECT * FROM interaction_drafts ORDER BY created_at')] if has_drafts else []
         has_dispatches = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_dispatches'").fetchone()
         dispatches = {r['draft_key']: dict(r) for r in db.execute('SELECT * FROM interaction_dispatches')} if has_dispatches else {}
+        has_suggestions = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_suggestions'").fetchone()
+        suggestions = {}
+        if has_suggestions:
+            for row in db.execute('SELECT * FROM interaction_suggestions ORDER BY created_at,suggestion_key'):
+                value = dict(row)
+                key = tuple(value[k] for k in ('platform', 'account', 'channel_id', 'comment_id'))
+                try:
+                    _, fingerprint = draft_source(db, *key)
+                    value['current_source'] = fingerprint == value['source_digest']
+                except PublishError:
+                    value['current_source'] = False
+                suggestions[key] = value
     by_source = {}
     for item in items:
         key = (item['platform'], item['account'], item['channel_id'])
@@ -80,6 +95,11 @@ def render(db_path, include_text=False, requested=()):
             note += f'；含人工导入 {manual_count} 条'
         if unknown:
             note += f'；其他状态 {unknown}'
+        decisions = [json.loads(suggestions[(*key, x['comment_id'])]['decision_json']) for x in pending
+                     if (*key, x['comment_id']) in suggestions and suggestions[(*key, x['comment_id'])]['current_source']]
+        if decisions:
+            counts = {action: sum(d['action'] == action for d in decisions) for action in ('reply', 'review', 'skip')}
+            note += f"；模型建议：拟回复 {counts['reply']}／转人工 {counts['review']}／建议跳过 {counts['skip']}（均待审）"
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(src['account'])}</td>"
                     f"<td>{e(STATES.get(src['state'], '状态未知'))}</td><td>{len(pending)}</td>"
                     f"<td>{len(handled)}</td><td>{e(local_time(src['last_success_at']))}</td><td>{e(note)}</td></tr>")
@@ -123,6 +143,17 @@ def render(db_path, include_text=False, requested=()):
         detail_section = '<details><summary>查看待处理评论</summary><ul>' + (''.join(details) or '<li>当前记录中没有待处理评论。</li>') + '</ul></details>'
     if observation_details:
         detail_section += '<details><summary>查看网页回复历史（不计入自动同步）</summary><ul>' + ''.join(observation_details) + '</ul></details>'
+    if suggestions:
+        suggestion_items = []
+        action_labels = {'reply': '建议回复', 'review': '转人工判断', 'skip': '建议跳过'}
+        for suggestion in suggestions.values():
+            value = json.loads(suggestion['decision_json'])
+            label = action_labels.get(value['action'], '未知建议') if suggestion['current_source'] else '原评论变化或已处理，历史建议待复核'
+            item = f"<li>{e(PLATFORMS.get(suggestion['platform'], suggestion['platform']))} · {e(suggestion['account'])} · {e(label)}"
+            if include_text:
+                item += f"<p>{e(value['text'])}</p><p>原因：{e(value['reason'])}</p>"
+            suggestion_items.append(item + '</li>')
+        detail_section += '<details><summary>模型建议（' + str(len(suggestions)) + ' 条原评论；均待审）</summary><p>只显示每条原评论最近保存的一项建议；作品或对话仍须复核。建议跳过不会标记已处理，任何建议都不是发送授权或平台回执。</p><ul>' + ''.join(suggestion_items) + '</ul></details>'
     if drafts:
         bound = [d for d in drafts if d['draft_key'] in dispatches]
         drafts = [d for d in drafts if d['draft_key'] not in dispatches]
