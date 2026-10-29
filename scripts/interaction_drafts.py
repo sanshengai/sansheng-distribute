@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local reply drafts bound to observed inbox content. No network or authorization."""
 import argparse
+from contextlib import nullcontext
 import json
 import sys
 from pathlib import Path
@@ -72,10 +73,54 @@ def listing(root, include_text=False):
     return result
 
 
+def save_review(root, platform, account, channel, comment, reply, *, expected_source, expected_draft):
+    """Explicit author edit; compare both the source and the previous draft."""
+    if platform not in PLATFORMS:
+        raise PublishError('不支持的平台')
+    reply = _string(reply, 'reply', 10000)
+    root = _safe_state_dir(root)
+    from youtube_comments_candidate import account_lock, _checked_plan, _receipt_key
+    guard = account_lock(root, channel) if platform == 'youtube' else nullcontext()
+    with guard, _lock(root), open_db(root) as db:
+        _, snapshot = source(db, platform, account, channel, comment)
+        if snapshot != expected_source:
+            raise PublishError('原评论已变化，请刷新后重新确认')
+        db.execute(SCHEMA)
+        identity = (platform, account, channel, comment)
+        old = db.execute('''SELECT draft_key FROM interaction_drafts WHERE platform=?
+            AND account=? AND channel_id=? AND comment_id=?''', identity).fetchone()
+        if (old['draft_key'] if old else None) != expected_draft:
+            raise PublishError('建议已被其他操作修改，请刷新后重新确认')
+        bindings = []
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_dispatches'").fetchone():
+            bindings = db.execute('''SELECT * FROM interaction_dispatches WHERE platform=?
+                    AND account=? AND channel_id=? AND comment_id=?''', identity).fetchall()
+            for bound in bindings:
+                intent = _checked_plan(root, bound['plan_key'], account, channel)
+                if (root / (_receipt_key(intent) + '.json')).exists():
+                    raise PublishError('已有发送尝试，先核验原结果，不能改稿重发')
+        key = digest({'source': snapshot, 'reply': reply})
+        if old and old['draft_key'] != key:
+            for bound in bindings:
+                if bound['draft_key'] == old['draft_key']:
+                    (root / ('grant-' + bound['plan_key'] + '.json')).unlink(missing_ok=True)
+            db.execute('DELETE FROM interaction_drafts WHERE draft_key=?', (old['draft_key'],))
+        db.execute('INSERT OR IGNORE INTO interaction_drafts VALUES (?,?,?,?,?,?,?,?)',
+                   (key, *identity, snapshot, reply, now()))
+        created = db.execute('SELECT created_at FROM interaction_drafts WHERE draft_key=?', (key,)).fetchone()[0]
+    return {'draft_key': key, 'created_at': created, 'state': 'draft', 'authorized': False, 'sent': False}
+
+
 def withdraw(root, key):
     root = _safe_state_dir(root)
     with _lock(root), open_db(root) as db:
         db.execute(SCHEMA)
+        row = db.execute('SELECT platform,channel_id FROM interaction_drafts WHERE draft_key=?', (key,)).fetchone()
+    # Match send/review lock order: channel first, inbox second. Never remove a
+    # draft between the last send guard and the platform write.
+    from youtube_comments_candidate import account_lock
+    guard = account_lock(root, row['channel_id']) if row and row['platform'] == 'youtube' else nullcontext()
+    with guard, _lock(root), open_db(root) as db:
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_dispatches'").fetchone():
             bound = db.execute('SELECT * FROM interaction_dispatches WHERE draft_key=?', (key,)).fetchone()
             if bound:
@@ -83,6 +128,7 @@ def withdraw(root, key):
                 intent = _checked_plan(root, bound['plan_key'], bound['account'], bound['channel_id'])
                 if (root / (_receipt_key(intent) + '.json')).exists():
                     raise PublishError('草稿已有发送尝试，保留原计划与恢复点，不能撤销后重发')
+                (root / ('grant-' + bound['plan_key'] + '.json')).unlink(missing_ok=True)
         count=db.execute('DELETE FROM interaction_drafts WHERE draft_key=?',(key,)).rowcount
     return {'withdrawn': count, 'platform_action':False}
 

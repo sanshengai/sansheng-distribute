@@ -87,12 +87,15 @@ def prepare(root, key, account, channel):
             'authorized': False, 'sent': False, 'reply_parent_id': intent['parent_id']}
 
 
-def authorize(root, key, account, channel, statement):
+def authorize(root, key, account, channel, statement, *, expected_created_at=None):
     root = _private_dir(root)
     draft, binding, intent = _binding(root, key, account, channel)
     if not isinstance(statement, str) or not statement.strip() or len(statement) > 4000:
         raise PublishError('须提供实际用户授权原话')
     with account_lock(root, channel), _lock(root), open_db(root) as db:
+        current = _draft(db, key, account, channel)
+        if current != draft or (expected_created_at is not None and current['created_at'] != expected_created_at):
+            raise PublishError('草稿已变化或被撤销，请重新确认')
         if (root / (_receipt_key(intent) + '.json')).exists():
             raise PublishError('原计划已有发送尝试，请先只读恢复，不能重新授权覆盖状态')
         _, fingerprint = source(db, 'youtube', account, channel, draft['comment_id'])
@@ -120,6 +123,9 @@ def _stamp(value):
 
 def _guard(root, draft, binding, client, intent):
     with _lock(root), open_db(root) as db:
+        current = _draft(db, draft['draft_key'], draft['account'], draft['channel_id'])
+        if current != draft:
+            raise PublishError('草稿已修改或撤销，原确认不能继续发送')
         _, fingerprint = source(db, 'youtube', draft['account'], draft['channel_id'], draft['comment_id'])
         if fingerprint != draft['source_digest']:
             raise PublishError('原评论缓存已变化，停止发送')
