@@ -45,6 +45,21 @@ python3 scripts/bilibili_comments_candidate.py --config /private/bilibili-commen
 
 该版本 CLI 的 reply 把 root 与 parent 同设为输入的 rpid。未来接统一发送器时，须分别保存根评论与直接父级，先核对当前原文和账号；一级评论试验不能代替楼中楼验收。[上游需求及作者实测](https://github.com/biliup/biliup/issues/1627)可作路线线索，不能代替当前账号的独立读回。
 
+## 有限轮次观察
+
+已明确启用本只读路线，需要观察重复读取、迟到留言和旧评论下的新回复时，可运行有限观察器。它沿用同一配置与收件箱，每轮重新核对真实账号、本人作品及全部读取边界，不调用模型、不发送、不刷新登录。
+
+```sh
+python3 scripts/interaction_bilibili_watch.py --config /private/bilibili-comments.json --state-dir /private/interaction-state watch --cycles 3 --interval-seconds 1800
+python3 scripts/interaction_bilibili_watch.py --config /private/bilibili-comments.json --state-dir /private/interaction-state status
+```
+
+默认只运行一轮；显式指定时最多 49 轮，间隔至少 1800 秒。观察期间冻结账号、UID、凭据路径、监测起点及作品范围，变更需要重新评估后另行启动；将 `enabled` 设为 `false` 会在下一轮停止，停用后仍可本地查询状态。错误立即停止，不自动重试；分页未完保留 partial，后续轮次继续已有游标。输出只报告当前明确作品范围，不扩展为全账号覆盖。
+
+整段观察按真实 UID 持有同机锁，账号别名不能启动第二份；单轮读取另沿用原锁。状态记录实际轮次、成功/部分/失败、锁持有及检查时间。进程启动或模拟时钟不算满 24 小时，有限只读观察也不等于已具备云端常驻或自动回复资格。工具不会自行创建系统定时任务。
+
+传输错误仅保留请求类型及 HTTP/业务数字错误码，不显示 Cookie、请求地址或响应正文；不能把一次查询失败解释为空评论，也不能由错误码猜定风控原因。
+
 ## 只读核验已知评论
 
 遇到已有评论 ID、列表却未出现时，使用 `scripts/bilibili_comment_readback.py`。它沿用上述私有配置，先核对登录、作品与作者，查询指定根评论及子回复；正常可见目标还须在一级列表确认根评论。每类查询最多 `--max-pages` 页（1 至 10，默认 3），超出预算仍未找到即保持未确认。不会调用已弃用的 `/reply/info`，也不发送、授权、重试或认领原发送回执。

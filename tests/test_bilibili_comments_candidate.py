@@ -243,6 +243,12 @@ class BilibiliCommentsTests(unittest.TestCase):
         with patch.object(c.opener,'open',return_value=io.BytesIO(b'{"code":-352,"message":"synthetic-secret"}')):
             with self.assertRaises(PublishError) as e:c.get('threads')
             self.assertNotIn('synthetic-secret',str(e.exception))
+            self.assertIn('code=-352',str(e.exception));self.assertIn('threads',str(e.exception))
+        failure=b.urllib.error.HTTPError('https://api.bilibili.com/?secret=synthetic-secret',412,'synthetic-secret',{},None)
+        with patch.object(c.opener,'open',side_effect=failure):
+            with self.assertRaises(PublishError) as e:c.get('identity')
+            self.assertIn('HTTP 412',str(e.exception));self.assertIn('identity',str(e.exception))
+            self.assertNotIn('synthetic-secret',str(e.exception))
 
 
 if __name__=='__main__':unittest.main()

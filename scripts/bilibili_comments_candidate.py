@@ -129,11 +129,13 @@ class Client:
                 raise PublishError('B站响应过大；保留未完成状态')
             raw = json.loads(b)
         except urllib.error.HTTPError as exc:
-            raise PublishError('B站只读 HTTP 查询失败；不换身份或自动重试') from None
+            raise PublishError(f'B站只读 {kind} 查询 HTTP {exc.code}；不换身份或自动重试') from None
         except (OSError, ValueError):
             raise PublishError('B站只读查询失败；不把错误当作空评论') from None
+        if isinstance(raw, dict) and type(raw.get('code')) is int and raw['code'] != 0:
+            raise PublishError(f'B站只读 {kind} 查询被拒绝，code={raw["code"]}；不回显凭据或响应正文')
         if (not isinstance(raw, dict) or type(raw.get('code')) is not int
-                or raw['code'] != 0 or not isinstance(raw.get('data'), dict)):
+                or not isinstance(raw.get('data'), dict)):
             raise PublishError('B站接口拒绝或数据缺失；不把错误当作空评论')
         return raw['data']
 
