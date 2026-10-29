@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from interaction_drafts import source as draft_source
 from publish_core import PublishError
+from weibo_official_inbox import overview as weibo_overview
 
 PLATFORMS = {'youtube': 'YouTube', 'x': 'X', 'weibo': '微博', 'bilibili': 'B 站',
              'douyin': '抖音', 'wechat': '公众号', 'wechat_channels': '微信视频号',
@@ -37,6 +38,19 @@ def local_time(value):
         return '时间无法解析'
 
 
+def weibo_read_label(value):
+    return {'partial': '官方已读（范围有限）', 'running': '官方检查中',
+            'error': '官方检查失败'}.get(value['state'], '官方状态待核对')
+
+
+def weibo_read_note(value):
+    stale = {'error': '本次失败，已有记录可能过时；',
+             'running': '本次检查未结束，已有记录可能过时；'}.get(value['state'], '')
+    return (f"官方 API：已发现待补上下文 {value['needs_context']} 条，历史 {value['historical']} 条，"
+            f"自评论 {value['own']} 条；接口文字表示有差异 {value['representation_differences']} 条；"
+            + stale + '不代表全量覆盖或当前可回复；补查父级和可见性后再拟稿，不自动发送')
+
+
 def render(db_path, include_text=False, requested=()):
     uri = Path(db_path).resolve(strict=True).as_uri() + '?mode=ro'
     with closing(sqlite3.connect(uri, uri=True)) as db:
@@ -56,6 +70,7 @@ def render(db_path, include_text=False, requested=()):
                 'SELECT platform,account,channel_id,comment_id FROM interaction_baselines'))
         has_observations = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_observations'").fetchone()
         observations = [json.loads(r[0]) for r in db.execute('SELECT document FROM interaction_observations ORDER BY observed_at, recorded_at')] if has_observations else []
+        weibo_reads = {r['account']: r for r in weibo_overview(db, include_text)}
         has_drafts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_drafts'").fetchone()
         drafts = [dict(r) for r in db.execute('SELECT * FROM interaction_drafts ORDER BY created_at')] if has_drafts else []
         has_dispatches = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_dispatches'").fetchone()
@@ -91,6 +106,7 @@ def render(db_path, include_text=False, requested=()):
         latest_observations[(observation['platform'], observation['account'])] = observation
     for src in sorted(sources, key=lambda x: (x['platform'], x['account'], x['channel_id'])):
         platform = src['platform']
+        official = weibo_reads.get(src['account']) if platform == 'weibo' else None
         seen_platforms.add(platform)
         key = (platform, src['account'], src['channel_id'])
         incoming = [x for x in by_source.get(key, []) if not x['is_own']]
@@ -106,13 +122,14 @@ def render(db_path, include_text=False, requested=()):
             coverage = f"评论串 {src['parents_scanned']}/{src['parents_total']}；回复未完成 {src['reply_incomplete']}"
         else:
             coverage = '覆盖范围以平台同步记录为准'
-        note = coverage + (('；' + str(src['error'])) if src.get('error') and src['error'] != coverage else '')
+        note = ('已接官方只读发现；原生历史对话仍保留' if official else
+                coverage + (('；' + str(src['error'])) if src.get('error') and src['error'] != coverage else ''))
         note += f'；平台已核验回复 {len(verified)} 条（历史回执）'
         if manual_count:
             note += f'；含人工导入 {manual_count} 条'
         if baseline_count:
             note += f'；历史基线 {baseline_count} 条（不自动拟稿，不计已回复）'
-        if (platform, src['account']) in latest_observations:
+        if (platform, src['account']) in latest_observations and not official:
             observation = latest_observations[(platform, src['account'])]
             note += ('；网页补充（' + local_time(observation['observed_at']) + '）：'
                      + observation['reason'] + '；下一步：' + observation['next_action']
@@ -136,9 +153,12 @@ def render(db_path, include_text=False, requested=()):
                      + f"，本轮模型请求 {cycle['model_requests']} 次；拟稿不代表发送")
         if circuit and circuit['reason']:
             note += '；拟稿控制：' + circuit['reason']
+        if official:
+            note += '；' + weibo_read_note(official)
+        pending_display = str(len(pending)) + (f"；待补上下文 {official['needs_context']}" if official else '')
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(src['account'])}</td>"
-                    f"<td>{e(STATES.get(src['state'], '状态未知'))}</td><td>{len(pending)}</td>"
-                    f"<td>{len(handled)}</td><td>{e(local_time(src['last_success_at']))}</td><td>{e(note)}</td></tr>")
+                    f"<td>{e(weibo_read_label(official) if official else STATES.get(src['state'], '状态未知'))}</td><td>{e(pending_display)}</td>"
+                    f"<td>{len(handled)}</td><td>{e(local_time(official['last_success_at'] if official else src['last_success_at']))}</td><td>{e(note)}</td></tr>")
         if include_text:
             for item in pending:
                 video = str(item['video_id'] or '')
@@ -161,9 +181,28 @@ def render(db_path, include_text=False, requested=()):
                                      f" · {e(labels[observation['state']])} · {e(local_time(observation['observed_at']))}"
                                      f"<p>{e(note)}</p></li>")
             continue
+        official = weibo_reads.get(account) if platform == 'weibo' else None
+        if official:
+            note += '；' + weibo_read_note(official)
         rows.append(f"<tr><td>{e(PLATFORMS.get(platform, platform))}</td><td>{e(account)}</td>"
-                    f"<td>{e(labels[observation['state']])}</td><td>未统计</td><td>另见网页记录</td>"
-                    f"<td>{e(local_time(observation['observed_at']))}（观察）</td><td>{e(note)}</td></tr>")
+                    f"<td>{e(weibo_read_label(official) if official else labels[observation['state']])}</td>"
+                    f"<td>{e('待补上下文 ' + str(official['needs_context']) if official else '未统计')}</td><td>另见网页记录</td>"
+                    f"<td>{e(local_time(official['last_success_at'] if official else observation['observed_at']))}</td><td>{e(note)}</td></tr>")
+    for account, official in weibo_reads.items():
+        seen_platforms.add('weibo')
+        if ('weibo', account) not in source_accounts and ('weibo', account) not in latest_observations:
+            rows.append(f"<tr><td>微博</td><td>{e(account)}</td><td>{e(weibo_read_label(official))}</td>"
+                        f"<td>待补上下文 {official['needs_context']}</td><td>未统计</td>"
+                        f"<td>{e(local_time(official['last_success_at']))}</td><td>{e(weibo_read_note(official))}</td></tr>")
+        if include_text:
+            for item in official['pending']:
+                views = json.loads(item['views_json'])
+                body = ''.join(f"<p>{e(kind)}：{e(view['body'])}</p>" for kind, view in views.items())
+                link = (f'<a href="https://weibo.com/{official["uid"]}/{item["work_id"]}" rel="noreferrer">查看作品补查对话</a>'
+                        if re.fullmatch(r'[0-9]+', official['uid']) and re.fullmatch(r'[0-9]+', item['work_id']) else '')
+                details.append(f"<li><b>微博 · {e(item['author_name'])} · 已发现待补上下文</b>"
+                               f"<span>{e(local_time(item['published_at']))}</span>{body}{link}"
+                               '<p>根评论、直接父级和当前可回复性尚未确认，未进入回复草稿。</p></li>')
     observation_details = []
     if include_text:
         for observation in observations:

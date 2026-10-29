@@ -19,6 +19,8 @@ metadata:
 
 B站评论可显式试用[只读候选及有限观察](references/bilibili-comments.md)，仅检查配置的本人作品，历史留言作为基线；有限观察固定范围、同 UID 独占、失败停止。使用第三方网页协议，真实样本不代表官方接口、全账号覆盖或无人值守回复已验收。
 
+微博已授权的官方助手读取可按[只读发现](references/weibo-official-inbox.md)接入同一看板，去重并区分历史、自评论与待补上下文；缺少父子关系的候选不进入拟稿或发送。普通评论的[官方 CLI 路线](references/weibo-official-cli.md)另需 OAuth、本人认证及试用或额度，尚未真账号验收，不自动开通。
+
 分发后在对话中按平台简述状态；系列多集优先按[批量分发](references/campaign.md)中的 `series-report` 生成精简看板，每个平台账号一行、每集一个状态格，并说明有证据的原因和建议。普通任务可用 `batch-report` 查看详细信息。明确区分账本快照、草稿、待作者操作和已核验公开；无记录不等于未发布，不创建假记录凑看板。
 
 了解本地支持的交接类型与已配置规则时，运行 `python3 scripts/publish.py platform-guide <平台>`，按需读[平台交接查询](references/platform-guide.md)；它不联网，也不证明平台能力已验收。扩展路线和竞品取舍见[分发架构](references/architecture.md)。

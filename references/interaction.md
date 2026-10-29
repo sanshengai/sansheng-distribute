@@ -1,6 +1,6 @@
 # 互动收件箱
 
-先读[平台能力与限制](interaction-platforms.md)。互动是按需启用的独立流程：YouTube 官方 API 的单账号只读候选已验收；B站显式指定作品的[第三方只读候选](bilibili-comments.md)已接入统一收件箱并完成有限真实样本；公众号指定已群发文章的官方只读候选仅经离线测试，其余平台没有接入自动采集器。网页曾经自测成功不等于持续监测。用户授权发送与是否需要逐条审核按已有真实授权执行，平台规则另行遵守。
+先读[平台能力与限制](interaction-platforms.md)。互动是按需启用的独立流程：YouTube 官方 API 的单账号只读候选已验收；B站显式指定作品的[第三方只读候选](bilibili-comments.md)已接入统一收件箱并完成有限真实样本；微博[官方只读发现](weibo-official-inbox.md)可按需接入看板，缺少关系的记录独立保留；公众号指定已群发文章的官方只读候选仅经离线测试，其余平台没有接入自动采集器。网页曾经自测成功不等于持续监测。用户授权发送与是否需要逐条审核按已有真实授权执行，平台规则另行遵守。
 
 ## 发现方式
 
@@ -32,7 +32,7 @@ python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<pr
 
 微博已观察到原生收件箱 JSON 时，优先按[微博观察接入](weibo-comments-capture.md)校验真实评论 ID、根与直接父级，并将旧留言设为历史基线；该路线不证明已自动同步或可自动发送。
 
-[微博官方助手只读试验](weibo-official-probe.md)已在单账号真实读到评论，并与原生历史记录交叉核对；目前返回缺少完整父子关系及分页契约，试验结果单独留证，不自动当作完整收件箱同步。不同接口中同一语音评论的文字表示可能不同，不能静默覆盖已导入原文。
+[微博官方助手只读试验](weibo-official-probe.md)已在单账号真实读到评论，并与原生历史记录交叉核对。后续按[官方只读发现](weibo-official-inbox.md)执行，显示实际读取时间、去重结果和待补上下文；目前缺少完整父子关系及分页契约，不当作完整收件箱同步，不将未知关系导入回复队列。不同接口中同一语音评论的文字表示分别保留，不能静默覆盖已导入原文。普通评论回复的另一套[官方 CLI](weibo-official-cli.md)须另验授权、资格、额度和真实读写。
 
 对于尚无自动采集能力的平台，可以将用户已取得的评论整理为权限 `0600` 的私有 JSON，通过 `python3 scripts/interaction_import.py --state-dir '<state-dir>' import --input '<private.json>'` 加入同一收件箱。JSON 顶层包含 `platform`、`account`、`channel_id`、`items`；每条必须有 `comment_id`、`video_id`、`body` 和布尔值 `is_own`，可包含 `thread_id`、`parent_id`、`author_name`、`author_channel`、`published_at`、`updated_at`。这些 ID 必须来自实际平台观察，不猜测、不编造；缺少稳定 ID 时保留原始记录，不强行导入。重复导入去重，内容冲突拒绝覆盖。
 
