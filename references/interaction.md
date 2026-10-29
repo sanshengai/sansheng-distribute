@@ -30,6 +30,8 @@ python3 scripts/interaction_dashboard.py --state-dir '<state-dir>' --output '<pr
 
 ## 人工观察的评论
 
+微博已观察到原生收件箱 JSON 时，优先按[微博观察接入](weibo-comments-capture.md)校验真实评论 ID、根与直接父级，并将旧留言设为历史基线；该路线不证明已自动同步或可自动发送。
+
 对于尚无自动采集能力的平台，可以将用户已取得的评论整理为权限 `0600` 的私有 JSON，通过 `python3 scripts/interaction_import.py --state-dir '<state-dir>' import --input '<private.json>'` 加入同一收件箱。JSON 顶层包含 `platform`、`account`、`channel_id`、`items`；每条必须有 `comment_id`、`video_id`、`body` 和布尔值 `is_own`，可包含 `thread_id`、`parent_id`、`author_name`、`author_channel`、`published_at`、`updated_at`。这些 ID 必须来自实际平台观察，不猜测、不编造；缺少稳定 ID 时保留原始记录，不强行导入。重复导入去重，内容冲突拒绝覆盖。
 
 看板将这类记录标为人工导入，并明确未证明平台已同步或全部查完。人工导入不会自动访问平台或发布回复；标记为已处理的命令及参数可用 `python3 scripts/interaction_import.py --help`、`python3 scripts/interaction_import.py --state-dir '<state-dir>' mark --help` 查看。状态目录不得放在 Skill 公开仓中。

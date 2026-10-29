@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from interaction_inbox import _lock, _private_dir, open_db
@@ -65,8 +66,22 @@ def validate(raw):
     return platform, account, channel, normalized
 
 
-def import_manual(root, document):
+def import_manual(root, document, *, baseline_before=None):
     platform, account, channel, items = validate(document)
+    cutoff = None
+    if baseline_before is not None:
+        try:
+            cutoff = datetime.fromisoformat(baseline_before.replace('Z', '+00:00'))
+            if cutoff.tzinfo is None:
+                raise ValueError()
+            cutoff = cutoff.astimezone(timezone.utc)
+            for item in items:
+                published = datetime.fromisoformat(item['published_at'].replace('Z', '+00:00'))
+                if published.tzinfo is None:
+                    raise ValueError()
+                item['baseline'] = not item['is_own'] and published < cutoff
+        except (TypeError, AttributeError, ValueError):
+            raise PublishError('历史基线需要带时区的截止时间及每条评论时间') from None
     root = _safe_state_dir(root)
     stamp = now()
     imported = skipped = 0
@@ -75,12 +90,20 @@ def import_manual(root, document):
             platform TEXT NOT NULL, account TEXT NOT NULL, channel_id TEXT NOT NULL,
             comment_id TEXT NOT NULL, first_imported_at TEXT NOT NULL, last_imported_at TEXT NOT NULL,
             PRIMARY KEY(platform,account,channel_id,comment_id))''')
+        if cutoff is not None:
+            db.execute('''CREATE TABLE IF NOT EXISTS interaction_baselines (
+                platform TEXT NOT NULL, account TEXT NOT NULL, channel_id TEXT NOT NULL,
+                comment_id TEXT NOT NULL, recorded_at TEXT NOT NULL,
+                PRIMARY KEY(platform,account,channel_id,comment_id))''')
         for row in items:
             key = (platform, account, channel, row['comment_id'])
-            old = db.execute('''SELECT video_id,body,is_own FROM interaction_items
+            old = db.execute('''SELECT video_id,body,is_own,thread_id,parent_id,author_channel,published_at
+                FROM interaction_items
                 WHERE platform=? AND account=? AND channel_id=? AND comment_id=?''', key).fetchone()
             if old:
-                if old['video_id'] != row['video_id'] or old['body'] != row['body'] or old['is_own'] != row['is_own']:
+                if any(old[field] != (row[field] or '' if field == 'thread_id' else row[field])
+                       for field in ('video_id', 'body', 'is_own', 'thread_id', 'parent_id',
+                                     'author_channel', 'published_at')):
                     raise PublishError('已有同 ID 评论内容不同；请核对原记录，不覆盖')
                 skipped += 1
                 db.execute('''UPDATE interaction_manual_provenance SET last_imported_at=?
@@ -95,6 +118,10 @@ def import_manual(root, document):
             db.execute('''INSERT INTO interaction_manual_provenance
                 (platform,account,channel_id,comment_id,first_imported_at,last_imported_at)
                 VALUES(?,?,?,?,?,?)''', (*key, stamp, stamp))
+            if row.get('baseline'):
+                db.execute('INSERT INTO interaction_baselines VALUES (?,?,?,?,?)', (*key, stamp))
+                db.execute('''UPDATE interaction_items SET local_status='handled'
+                    WHERE platform=? AND account=? AND channel_id=? AND comment_id=?''', key)
             imported += 1
         if items:
             db.execute('''INSERT INTO interaction_sources(platform,account,channel_id,state,started_at,finished_at,error)

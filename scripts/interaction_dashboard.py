@@ -51,6 +51,9 @@ def render(db_path, include_text=False, requested=()):
         has_baselines = db.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_bilibili_baselines'").fetchone()
         baselines = {('bilibili',r['account'],r['channel_id'],r['comment_id']) for r in
                      db.execute('SELECT * FROM interaction_bilibili_baselines')} if has_baselines else set()
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_baselines'").fetchone():
+            baselines.update(tuple(r) for r in db.execute(
+                'SELECT platform,account,channel_id,comment_id FROM interaction_baselines'))
         has_observations = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_observations'").fetchone()
         observations = [json.loads(r[0]) for r in db.execute('SELECT document FROM interaction_observations ORDER BY observed_at, recorded_at')] if has_observations else []
         has_drafts = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='interaction_drafts'").fetchone()
