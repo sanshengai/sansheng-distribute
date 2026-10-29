@@ -13,6 +13,7 @@ import time
 
 from interaction_import import _safe_state_dir
 from interaction_monitor import Monitor, _open_lock, status
+from interaction_notify import check as check_notification
 from publish_core import PublishError
 from weibo_official_inbox import sync, validate_config
 from weibo_comments_capture import _private_json
@@ -35,7 +36,7 @@ def _binding(config):
 
 
 def watch(root, load_config, *, interval=1800, cycles=1, sync_fn=sync,
-          sleep_fn=time.sleep, clock=None,
+          sleep_fn=time.sleep, clock=None, notify=False, notify_fn=check_notification,
           emit=lambda row: print(json.dumps(row, ensure_ascii=False), flush=True)):
     if (type(interval) is not int or not 1800 <= interval <= 86400 or
             type(cycles) is not int or not 1 <= cycles <= 49):
@@ -67,11 +68,17 @@ def watch(root, load_config, *, interval=1800, cycles=1, sync_fn=sync,
                         result['returned_rows'] < result['distinct_comments'] or
                         result['new_local_candidates'] > result['distinct_comments']):
                     raise PublishError('微博只读观察返回的边界未确认')
-                emit({'cycle': n, 'monitor_run_id': monitor.data['run_id'], 'state': 'partial',
+                row = {'cycle': n, 'monitor_run_id': monitor.data['run_id'], 'state': 'partial',
                       **{k: result[k] for k in ('returned_rows', 'distinct_comments', 'new_local_candidates')},
                       'scope': 'bounded_received_and_configured_works', 'social_writes': 0,
-                      'canonical_imports': 0, 'send_enabled': False})
+                      'canonical_imports': 0, 'send_enabled': False}
                 monitor.record_cycle('partial')
+                if notify:
+                    try:
+                        row['notification'] = notify_fn(root, notify=True)['notification']
+                    except Exception:
+                        row['notification'] = 'error'
+                emit(row)
             except Exception:
                 monitor.record_cycle('error'); monitor.finish('failed', 'reader_cycle_error')
                 return {'state': 'error', 'cycles': n, 'social_writes': 0,
@@ -91,6 +98,7 @@ def main():
     run = sub.add_parser('watch')
     run.add_argument('--interval-seconds', type=int, default=1800)
     run.add_argument('--cycles', type=int, default=1)
+    run.add_argument('--notify-macos', action='store_true', help='每轮成功读取后合并请求本机提醒；默认关闭')
     args = p.parse_args()
     try:
         if args.command == 'status':
@@ -101,7 +109,7 @@ def main():
             result = status(_safe_state_dir(args.state_dir), 'weibo', cfg['account'], cfg['uid'])
         else:
             result = watch(args.state_dir, lambda: _private_json(args.config),
-                           interval=args.interval_seconds, cycles=args.cycles)
+                           interval=args.interval_seconds, cycles=args.cycles, notify=args.notify_macos)
         print(json.dumps(result, ensure_ascii=False))
         return 2 if result.get('state') == 'error' else 0
     except (PublishError, OSError, ValueError, TypeError):

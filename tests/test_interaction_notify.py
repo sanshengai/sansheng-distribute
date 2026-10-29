@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import interaction_notify as notice
 from interaction_inbox import open_db
+from weibo_official_inbox import SCHEMA as WEIBO_SCHEMA
 
 
 class NoticeTests(unittest.TestCase):
@@ -104,6 +105,121 @@ class NoticeTests(unittest.TestCase):
         result = notice.check(self.root)
         self.assertEqual(result['notification'], 'disabled')
         self.assertEqual(result['candidates'], 0)
+
+    def weibo(self, cid=None, *, own=0, baseline=0, state='partial'):
+        with closing(open_db(self.root)) as db:
+            db.executescript(WEIBO_SCHEMA)
+            db.execute('''INSERT INTO weibo_official_sources(account,uid,not_before,state,started_at)
+                VALUES('weibo-account','101','2026-01-01T00:00:00Z',?,'2026-01-02T00:00:00Z')
+                ON CONFLICT(account) DO UPDATE SET state=excluded.state''', (state,))
+            if cid:
+                db.execute('''INSERT INTO weibo_official_items VALUES(
+                    'weibo-account','101',?,'201','301','SECRET NAME',
+                    '2026-01-02T00:00:00Z',?,?,?,
+                    '2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')''',
+                    (cid, own, baseline, '{"received":"SECRET TEXT"}'))
+            db.commit()
+
+    def test_discovery_own_baseline_does_not_depend_on_canonical_source_baseline(self):
+        notice.check(self.root)
+        self.weibo('existing')
+        result = notice.check(self.root, True, sender=lambda: self.fail('initial discovery baseline'))
+        self.assertEqual((result['baseline_items'], result['context_candidates']), (1, 0))
+        self.weibo('new')
+        disabled = notice.check(self.root)
+        self.assertEqual((disabled['candidates'], disabled['context_candidates']), (1, 1))
+        sent = notice.check(self.root, True, sender=lambda: 'requested')
+        self.assertEqual((sent['candidates'], sent['context_candidates']), (1, 1))
+        again = notice.check(self.root, True, sender=lambda: self.fail('duplicate'))
+        self.assertEqual(again['candidates'], 0)
+        self.assertNotIn('SECRET', str(sent))
+        with closing(open_db(self.root)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM interaction_items WHERE platform='weibo'").fetchone()[0], 0)
+
+    def test_discovery_historical_self_failed_source_and_empty_baseline(self):
+        self.weibo()
+        self.assertEqual(notice.check(self.root)['baseline_items'], 0)
+        self.weibo('historical', baseline=1)
+        self.weibo('own', own=1)
+        ignored = notice.check(self.root, True, sender=lambda: self.fail('self/history'))
+        self.assertEqual((ignored['ignored_items'], ignored['candidates']), (2, 0))
+        self.weibo('new', state='error')
+        self.assertEqual(notice.check(self.root)['candidates'], 0)
+        self.weibo(state='partial')
+        self.assertEqual(notice.check(self.root)['context_candidates'], 1)
+
+    def test_discovery_notice_and_later_canonical_item_share_dedup_key(self):
+        self.weibo()
+        notice.check(self.root)
+        self.weibo('shared')
+        notice.check(self.root, True, sender=lambda: 'requested')
+        with closing(open_db(self.root)) as db:
+            db.execute("INSERT INTO interaction_sources(platform,account,channel_id,state) VALUES('weibo','weibo-account','101','partial')")
+            db.execute('''INSERT INTO interaction_items(platform,account,channel_id,comment_id,
+                thread_id,first_seen_at,last_seen_at,is_own,local_status,published_at,body,author_name)
+                VALUES('weibo','weibo-account','101','shared','shared',
+                '2026-01-02T00:00:00Z','2026-01-02T00:00:00Z',0,'new',
+                '2026-01-02T00:00:00Z','SECRET TEXT','SECRET NAME')''')
+            db.commit()
+        result = notice.check(self.root, True, sender=lambda: self.fail('canonical duplicate'))
+        self.assertEqual(result['candidates'], 0)
+
+    def test_discovery_does_not_revive_canonical_handled_item_when_reader_failed(self):
+        self.weibo()
+        notice.check(self.root)
+        self.weibo('handled')
+        with closing(open_db(self.root)) as db:
+            db.execute("INSERT INTO interaction_sources(platform,account,channel_id,state) VALUES('weibo','weibo-account','101','error')")
+            db.execute('''INSERT INTO interaction_items(platform,account,channel_id,comment_id,
+                thread_id,first_seen_at,last_seen_at,is_own,local_status,published_at,body,author_name)
+                VALUES('weibo','weibo-account','101','handled','handled',
+                '2026-01-02T00:00:00Z','2026-01-02T00:00:00Z',0,'handled',
+                '2026-01-02T00:00:00Z','SECRET TEXT','SECRET NAME')''')
+            db.commit()
+        result = notice.check(self.root, True, sender=lambda: self.fail('handled item reactivated'))
+        self.assertEqual(result['candidates'], 0)
+
+    def test_discovery_failed_alert_is_not_retried_and_other_accounts_keep_own_baseline(self):
+        self.weibo()
+        notice.check(self.root)
+        self.weibo('new')
+        self.assertEqual(notice.check(self.root, True, sender=lambda: 'unknown')['notification'], 'unknown')
+        self.assertEqual(notice.check(self.root, True, sender=lambda: self.fail('retry'))['candidates'], 0)
+        with closing(open_db(self.root)) as db:
+            db.execute('''INSERT INTO weibo_official_sources(account,uid,not_before,state,started_at)
+                VALUES('other','102','2026-01-01T00:00:00Z','partial','2026-01-02T00:00:00Z')''')
+            db.execute('''INSERT INTO weibo_official_items SELECT 'other','102',comment_id,
+                work_id,author_id,author_name,published_at,is_own,baseline,views_json,first_seen_at,last_seen_at
+                FROM weibo_official_items''')
+            db.commit()
+        self.assertEqual(notice.check(self.root, True, sender=lambda: self.fail('other account baseline'))['baseline_items'], 1)
+
+    def test_discovery_and_canonical_new_comments_aggregate_one_request(self):
+        self.weibo()
+        notice.check(self.root)
+        self.weibo('new')
+        self.add('fresh', '2026-01-02T00:00:00Z')
+        calls = []
+        result = notice.check(self.root, True, sender=lambda: calls.append(1) or 'requested')
+        self.assertEqual((result['candidates'], result['context_candidates'], calls), (2, 1, [1]))
+
+    def test_discovery_parallel_checks_make_one_attempt(self):
+        self.weibo()
+        notice.check(self.root)
+        self.weibo('new')
+        entered, release, calls = threading.Event(), threading.Event(), []
+        def sender():
+            calls.append(1); entered.set(); self.assertTrue(release.wait(3))
+            return 'requested'
+        worker = threading.Thread(target=notice.check, args=(self.root, True), kwargs={'sender':sender})
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            self.assertEqual(notice.check(self.root, True, sender=lambda: self.fail('parallel duplicate'))['candidates'], 0)
+        finally:
+            release.set(); worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(calls, [1])
 
 
 if __name__ == '__main__':

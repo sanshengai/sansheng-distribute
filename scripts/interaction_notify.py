@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS interaction_notice_items (
  comment_id TEXT NOT NULL, state TEXT NOT NULL, batch_id TEXT,
  created_at TEXT NOT NULL, PRIMARY KEY(platform, account, channel_id, comment_id)
 );
+CREATE TABLE IF NOT EXISTS interaction_notice_discovery_sources (
+ kind TEXT NOT NULL, account TEXT NOT NULL, channel_id TEXT NOT NULL,
+ baseline_at TEXT NOT NULL, PRIMARY KEY(kind, account, channel_id)
+);
 '''
 
 
@@ -61,6 +65,50 @@ def notify_monitor_stopped():
         return 'unknown'
     except OSError:
         return 'failed'
+
+
+def _weibo_discoveries(db, stamp, batch_id, notify, ready):
+    """Alert on discovery without promoting a comment to a replyable thread."""
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'weibo_official_sources', 'weibo_official_items'} <= tables:
+        return 0, 0, 0
+    baselines = ignored = candidates = 0
+    sources = db.execute("SELECT account,uid FROM weibo_official_sources WHERE state='partial'").fetchall()
+    for source in sources:
+        key = ('weibo', source['account'], source['uid'])
+        discovery_key = ('weibo-official', source['account'], source['uid'])
+        baseline = db.execute('''SELECT 1 FROM interaction_notice_discovery_sources
+            WHERE kind=? AND account=? AND channel_id=?''', discovery_key).fetchone()
+        # One shared comment notice key deduplicates later canonical imports. A
+        # canonical item owns its handling/status even if its reader is failed.
+        items = db.execute('''SELECT d.comment_id,d.baseline,d.is_own
+            FROM weibo_official_items d WHERE d.account=? AND d.uid=?
+            AND NOT EXISTS (SELECT 1 FROM interaction_notice_items n
+                WHERE n.platform='weibo' AND n.account=d.account
+                AND n.channel_id=d.uid AND n.comment_id=d.comment_id)
+            AND NOT EXISTS (SELECT 1 FROM interaction_items i
+                WHERE i.platform='weibo' AND i.account=d.account
+                AND i.channel_id=d.uid AND i.comment_id=d.comment_id)''', key[1:]).fetchall()
+        if baseline is None:
+            db.execute('INSERT INTO interaction_notice_discovery_sources VALUES(?,?,?,?)',
+                       (*discovery_key, stamp))
+        for item in items:
+            item_key = (*key, item['comment_id'])
+            if baseline is None:
+                state = 'baseline'
+                baselines += 1
+            elif item['baseline'] or item['is_own']:
+                state = 'ignored'
+                ignored += 1
+            else:
+                candidates += 1
+                ready.append(item_key)
+                if not notify:
+                    continue
+                state = 'attempted'
+            db.execute('INSERT INTO interaction_notice_items VALUES(?,?,?,?,?,?,?)',
+                       (*item_key, state, batch_id if state == 'attempted' else None, stamp))
+    return baselines, ignored, candidates
 
 
 def check(root, notify=False, *, sender=_request_notification):
@@ -121,6 +169,10 @@ def check(root, notify=False, *, sender=_request_notification):
                     continue
                 db.execute('INSERT INTO interaction_notice_items VALUES(?,?,?,?,?,?,?)',
                            (*item_key,state,batch_id if state == 'attempted' else None,stamp))
+        discovery_baselines, discovery_ignored, context_candidates = _weibo_discoveries(
+            db, stamp, batch_id, notify, ready)
+        baselines += discovery_baselines
+        ignored += discovery_ignored
         db.commit()
     request = 'no_candidates' if notify else 'disabled'
     if ready and notify:
@@ -136,6 +188,7 @@ def check(root, notify=False, *, sender=_request_notification):
             db.commit()
     return {'notification':request, 'candidates':len(ready), 'baseline_items':baselines,
             'historical_items':older, 'ignored_items':ignored,
+            'context_candidates':context_candidates,
             'note':'只记录通知请求，不证明系统展示或用户已看到'}
 
 

@@ -60,6 +60,20 @@ class WeiboWatchTests(unittest.TestCase):
         self.watch(cycles=1)
         self.assertEqual((self.status()['partial_cycles'], self.status()['complete_cycles']), (1, 0))
 
+    def test_notifications_are_opt_in_and_failures_do_not_stop_reader(self):
+        notifier = Mock(return_value={'notification': 'requested'})
+        self.watch(notify_fn=notifier)
+        notifier.assert_not_called()
+        self.rows.clear()
+        self.watch(notify=True, notify_fn=notifier)
+        self.assertEqual(notifier.call_count, 2)
+        self.assertTrue(all(r['notification'] == 'requested' for r in self.rows))
+        self.rows.clear()
+        result = self.watch(notify=True, notify_fn=Mock(side_effect=RuntimeError('SECRET')))
+        self.assertEqual(result['state'], 'completed')
+        self.assertTrue(all(r['notification'] == 'error' for r in self.rows))
+        self.assertNotIn('SECRET', str(self.rows))
+
     def test_error_stops_without_retry_or_copying_secret(self):
         self.sync.side_effect = PublishError('secret-from-transport')
         result = self.watch()
