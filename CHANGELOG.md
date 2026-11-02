@@ -2,6 +2,8 @@
 
 ## [未发布]
 
+- **根因修复：X 长文（>280 加权字符）回执漏捕（2026-11-03 S5E01）**：Premium 账号超长正文由 X 走 `CreateNoteTweet`（响应根为 `data.notetweet_create`），旧捕获只认 `CreateTweet`，推文在发送输入后 0.4s 已创建却记为 submission_unknown、`native_response_count=0`，且候选恢复要求回执数=1 而无法认领。现捕获同时识别两种操作；回执完全未观察到（计数 0、无回执错误）时，`recover-x` 只认领雪花 ID 时间落在本次唯一发送输入后 -2–90s 内的作品，同原片云端媒体、账号、全文仍逐项核对。tests：test_x_publish.NoteTweetCaptureTests、test_x_video_publish 新增计数 0 恢复用例。
+
 - **根因修复：平台入口标签被其他执行器关闭（2026-11-03 S5 微博）**：同一专用 Chrome 上另有执行器关闭了 weibo.com 首页标签，`select_page` 报「平台页面不是唯一」，整集停住。新增通用 `browser_runtime.home_anchor`（缺失时用 `Target.createTarget background=true focus=false` 后台重开，不前台；URL 不符拒绝），`x_home_anchor` 改为委托它，新增 `weibo_home_anchor`；微博发布/读回路径先 `select_page`，PublishError 时回退重开锚点。同步 Playwright 在 `time.sleep` 期间不处理新标签事件，新增 `_pump` 用已有页面的 `wait_for_timeout` 让事件进来。tests/test_weibo_home_anchor.py（13 例）。
 - **根因修复：YouTube 上传后立即读回误判失败（2026-11-03 S5E01，S4E06/E08 同类）**：刚上传时 videos.list 可能返回空 items，或视频处理中元数据未落定，旧逻辑当成错误 exit 2，作品实际已发布，只能靠 resume 补认。现：空 items 或「未处理完且元数据未落定」返回 pending（绝不判成功）；处理完成后仍不符才报错；频道不符永远报错。新增 `safe_reason()`，`main` 仅对固定文案的 PublishError 输出 reason 字段，避免把响应内容打进日志。tests/test_youtube_adapter.py 新增 YoutubeEarlyReadbackTest。
 

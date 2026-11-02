@@ -119,6 +119,7 @@ class XVideoPublicationTests(unittest.TestCase):
         self.lose_acceptance();marker=engine.marker_path(self.request);original=read_json(marker)
         for field,value in [('native_input_checkpointed_at',None),('native_response_count',0),
                             ('native_response_count',2),('submission_protocol',1)]:
+            # count 0 still rejected here: fixture ID 123456789 is not timed after the send input
             write_json(marker,dict(original,**{field:value}))
             with self.subTest(field=field),self.assertRaises(PublishError):
                 run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id='123456789',recovery_platform='x')
@@ -130,6 +131,31 @@ class XVideoPublicationTests(unittest.TestCase):
         changed=copy.deepcopy(original);changed['publication_media']['source_sha256']='0'*64;write_json(marker,changed)
         with self.assertRaises(PublishError):
             run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id='123456789',recovery_platform='x')
+        self.assertEqual((self.clicks,len(self.page.uploads)),(1,1))
+
+    def snowflake_after_input(self,lag):
+        marker=engine.marker_path(self.request);saved=read_json(marker)
+        ms=int((saved['native_input_checkpointed_at']+lag)*1000)-x_post.TWITTER_EPOCH_MS
+        ident=str(ms<<22)
+        for node in (self.detail.result,self.detail.result['legacy']):
+            node['rest_id' if node is self.detail.result else 'id_str']=ident
+        self.detail.permalinks=['/demo/status/'+ident]
+        return ident
+
+    def test_unobserved_receipt_recovers_only_post_timed_right_after_input(self):
+        self.lose_acceptance();marker=engine.marker_path(self.request)
+        self.assertEqual(read_json(marker)['native_response_count'],1)
+        saved=read_json(marker);saved.pop('receipt_error',None);saved['native_response_count']=0;write_json(marker,saved)
+        late=self.snowflake_after_input(600)
+        with self.assertRaisesRegex(PublishError,'时间'):
+            run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id=late,recovery_platform='x')
+        write_json(marker,dict(read_json(marker),receipt_error='x'))
+        ok=self.snowflake_after_input(0.4)
+        with self.assertRaisesRegex(PublishError,'回执已报错'):
+            run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id=ok,recovery_platform='x')
+        saved=read_json(marker);saved.pop('receipt_error');write_json(marker,saved)
+        result=run(self.path,'x',self.profile,self.store,resume=True,recover_remote_id=ok,recovery_platform='x')
+        self.assertEqual((result['state'],result['remote_id']),('published',ok))
         self.assertEqual((self.clicks,len(self.page.uploads)),(1,1))
 
     def test_wrong_post_media_keeps_actual_post_identity_and_rejects_publication(self):

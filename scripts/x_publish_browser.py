@@ -264,9 +264,18 @@ def recover_candidate(request, pack, bound, marker, profile):
     if (request.get('recovery_platform')!='x' or request['job']['state']!='submission_unknown'
             or request['job'].get('remote_id') or any(saved.get(k)!=v for k,v in bound.items())
             or saved.get('submission_protocol')!=2 or not saved.get('native_input_checkpointed_at')
-            or saved.get('native_response_count')!=1 or saved.get('accepted')):
+            or saved.get('native_response_count') not in (0,1) or saved.get('accepted')):
         raise PublishError('X 候选恢复缺少原任务、首次发送与原片身份；不认领')
     x_post.status_url(bound['identity'],candidate)
+    if saved.get('native_response_count')==0:
+        # Receipt never observed (e.g. an unrecognised operation). Only a post whose
+        # snowflake time sits right after this attempt's single native input may be claimed;
+        # same cloud media, account and full text are still verified below.
+        if saved.get('receipt_error'):
+            raise PublishError('X 原生回执已报错；不认领')
+        lag=x_post.snowflake_seconds(candidate)-float(saved['native_input_checkpointed_at'])
+        if not -2<=lag<=90:
+            raise PublishError('X 候选作品时间与本次唯一发送输入不符；不认领')
     x_post.check_publication_media(pack,saved.get('publication_media'))
     with engine.connect(profile) as connection:
         anchor=engine.select_page(connection,'x',target_id=saved['target_id'])

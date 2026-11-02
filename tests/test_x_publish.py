@@ -338,3 +338,20 @@ class XPublicationTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class NoteTweetCaptureTests(unittest.TestCase):
+    """Long (>280 weighted) posts are sent by X as CreateNoteTweet (2026-11-03 S5E01)."""
+    def test_note_tweet_receipt_is_captured(self):
+        saved=[];cap=x_post.Capture(dict(fields=dict(composed_text='完整文案')),'@demo',saved.append)
+        body=dict(data=dict(notetweet_create=dict(tweet_results=dict(result=tweet()))))
+        cap.response(Response(body,'CreateNoteTweet'))
+        self.assertIsNone(cap.error);self.assertEqual((cap.count,cap.accepted['remote_id']),(1,'123456789'))
+        self.assertEqual(saved[0]['remote_id'],'123456789')
+
+    def test_other_operations_ignored_and_second_receipt_errors(self):
+        cap=x_post.Capture(dict(fields=dict(composed_text='完整文案')),'@demo',lambda v:None)
+        cap.response(Response({}, 'CreateNoteTweetDraft'));self.assertEqual(cap.count,0)
+        body=dict(data=dict(create_tweet=dict(tweet_results=dict(result=tweet()))))
+        cap.response(Response(body));cap.response(Response(body,'CreateNoteTweet'))
+        self.assertEqual(cap.count,2);self.assertTrue(cap.error)

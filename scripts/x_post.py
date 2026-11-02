@@ -226,8 +226,10 @@ class Capture:
     def response(self, response):
         parts = urlsplit(response.url)
         if (parts.scheme != 'https' or parts.netloc != 'x.com'
-                or not re.fullmatch(r'/i/api/graphql/[^/]+/CreateTweet', parts.path)):
+                or not re.fullmatch(r'/i/api/graphql/[^/]+/(CreateTweet|CreateNoteTweet)', parts.path)):
             return
+        # Over 280 weighted chars X (Premium) sends CreateNoteTweet instead (2026-11-03 S5E01).
+        operation = parts.path.rsplit('/', 1)[-1]
         self.count += 1
         try:
             if self.count != 1 or response.request.method != 'POST' or response.status != 200:
@@ -235,7 +237,8 @@ class Capture:
             body = response.json()
             if not isinstance(body, dict) or body.get('errors'):
                 raise PublishError('X 原生投稿返回错误；不重复点击')
-            result = body['data']['create_tweet']['tweet_results']['result']
+            root = 'notetweet_create' if operation == 'CreateNoteTweet' else 'create_tweet'
+            result = body['data'][root]['tweet_results']['result']
             user=result.get('core',{}).get('user_results',{}).get('result',{})
             self.diagnostic=dict(result_type=result.get('__typename'), result_keys=list(result),
                 legacy_keys=list(result.get('legacy',{})), user_keys=list(user))
@@ -248,6 +251,13 @@ class Capture:
         except Exception as exc:
             self.diagnostic=dict(self.diagnostic or {},error=str(exc) if isinstance(exc,PublishError) else type(exc).__name__)
             self.error = 'X 原生受理回执未能完整核对或保存；保持未知，不重复点击'
+
+
+TWITTER_EPOCH_MS = 1288834974657
+
+
+def snowflake_seconds(remote_id):
+    return ((int(remote_id) >> 22) + TWITTER_EPOCH_MS) / 1000
 
 
 def detail_result(body, remote_id):
