@@ -136,7 +136,7 @@ class XVideoDispatchTests(unittest.TestCase):
         def window(anchor,**kwargs):
             self.assertIs(anchor,self.anchor);self.assertTrue(kwargs['retain']);self.windows.append(self.page)
             yield self.page
-        def select(connection,platform,*,path=None,target_id=None):
+        def select(connection,platform,*,path=None,target_id=None,anchor=False):
             if path=='/home':return self.anchor
             if target_id!=self.page.context.ident:raise PublishError('会话丢失')
             return self.page

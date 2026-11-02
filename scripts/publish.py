@@ -45,7 +45,7 @@ def main():
     p.add_argument('--statement', required=True); p.add_argument('--reviewed-at', required=True)
     p = sub.add_parser("resume-job", help="源文件或交接清单丢失时，按账本 key 只读恢复")
     p.add_argument("key")
-    for name in ('recover-wechat','recover-x','recover-weibo'):
+    for name in ('recover-wechat','recover-x','recover-weibo','recover-wechat_channels'):
         p = sub.add_parser(name, help='只读核对明确候选身份后恢复未知任务，不重新提交')
         p.add_argument('key'); p.add_argument('--remote-id', required=True)
     for name in ("prepare", "authorize", "run", "resume", "advance", "adopt"):
@@ -152,7 +152,7 @@ def main():
             elif args.action == "return-write":
                 from write_bridge import return_to_write
                 result = return_to_write(store,args.key,load_profile(args.profile),args.article_dir,args.write_scripts)
-            elif args.action in {"resume-job", "recover-wechat", "recover-x", "recover-weibo"}:
+            elif args.action in {"resume-job", "recover-wechat", "recover-x", "recover-weibo", "recover-wechat_channels"}:
                 job = store.status(args.key)
                 result = run(store.directory / "snapshots" / f"{args.key}.json", job["target_id"], load_profile(args.profile), store,
                              resume=True, recover_remote_id=args.remote_id if args.action.startswith('recover-') else None,

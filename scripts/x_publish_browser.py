@@ -258,15 +258,17 @@ def dispatch(request_path, action, profile, lock_fd):
         if pack['content_type'] in {'video', 'images'}:
             x_post.check_publication_media(pack, saved.get('publication_media'))
     with engine.connect(profile, writing=action == 'execute') as connection:
-        anchor = engine.select_page(connection, 'x', path='/home')
+        anchor = engine.select_page(connection, 'x', path='/home', anchor=True)
         if action == 'execute':
             if pack['content_type'] in {'video', 'images'}:
                 from browser_assets import stage
                 assets = stage(pack, request_path)
                 if pack['content_type'] == 'video':
                     import x_video
-                    size = x_video.prepare(assets[0])
-            with background_window(anchor, cdp_url=endpoint, retain=True) as page:
+                    from x_compose_ready import decodable
+                    size = x_video.prepare(assets[0]); __import__('browser_assets').checked_path(assets[0]) and decodable(__import__('browser_assets').checked_path(assets[0]))
+            from x_compose_ready import KeepAwake
+            with KeepAwake(), background_window(anchor, cdp_url=endpoint, retain=True) as page:
                 saved = dict(bound, target_id=engine.target_id(page), state='owned_window_opened', submission_protocol=2)
                 if pack['content_type'] == 'video':
                     saved.update(source_size=size, upload_events=[], upload_errors=[])
@@ -275,9 +277,8 @@ def dispatch(request_path, action, profile, lock_fd):
                 fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, 'w') as out:
                     json.dump(saved, out); out.flush(); os.fsync(out.fileno())
-                page.goto('https://x.com/compose/post', wait_until='domcontentloaded', timeout=25000)
-                page.locator('[role="dialog"][aria-modal="true"] [data-testid="tweetTextarea_0"]').wait_for(
-                    state='visible', timeout=20000)
+                from x_compose_ready import open_composer
+                open_composer(page, saved, marker, identity)
                 engine.assert_identity(page, identity); engine.assert_no_warning(page)
                 if pack['content_type'] == 'video':
                     from x_video_browser import fill

@@ -195,10 +195,13 @@ class NativeObservation(unittest.TestCase):
         self.native=dict(media_id='12345678',size=12,chunks=[digest],sdk_version='1.2.3',
                          width=1920,height=1080,duration=62)
         self.visible=True;self.calls=[];outer=self
+        self.file_meta=None;self.waits=[]
         class Page:
-            def evaluate(self,script):
+            def evaluate(self,script,arg=None):
                 outer.calls.append(script)
+                if script==video.FILE_META:return copy.deepcopy(outer.file_meta)
                 return outer.visible if script==video.READY else copy.deepcopy(outer.native)
+            def wait_for_timeout(self,ms):outer.waits.append(ms)
         self.page=Page()
 
     def test_readonly_observation_binds_native_current_bytes_and_cloud_identity(self):
@@ -242,6 +245,29 @@ class NativeObservation(unittest.TestCase):
     def test_local_source_change_cannot_be_accepted_by_old_native_receipt(self):
         Path(self.asset['absolute_path']).write_bytes(b'changed bytes')
         with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+
+    def test_missing_sdk_metadata_waits_bounded_then_reads_native_current_file(self):
+        for k in ('width','height','duration'):self.native[k]=None
+        self.file_meta=dict(width=1920,height=1080,duration=62)
+        result=video.observe_source(self.page,self.asset,self.saved)
+        self.assertEqual((result['width'],result['height'],result['duration']),(1920,1080,62))
+        self.assertEqual(self.waits,[video.META_SDK_POLL_MS]*video.META_SDK_POLLS)
+        self.assertEqual(self.calls.count(video.FILE_META),1)
+        self.assertLessEqual(video.META_SDK_POLLS*video.META_SDK_POLL_MS+video.META_FILE_ATTEMPTS*video.META_FILE_TIMEOUT_MS,40000)
+
+    def test_still_missing_or_wrong_metadata_after_bounded_wait_stops(self):
+        for k in ('width','height','duration'):self.native[k]=None
+        for meta in (None,{},dict(width=1920,height=None,duration=62)):
+            with self.subTest(meta=meta):
+                self.file_meta=meta;self.calls=[];self.waits=[]
+                with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+                self.assertEqual(self.calls.count(video.FILE_META),video.META_FILE_ATTEMPTS)
+        self.file_meta=dict(width=0,height=1080,duration=62)
+        with self.assertRaises(PublishError):video.observe_source(self.page,self.asset,self.saved)
+
+    def test_complete_sdk_metadata_never_waits_or_decodes(self):
+        video.observe_source(self.page,self.asset,self.saved)
+        self.assertEqual(self.waits,[]);self.assertNotIn(video.FILE_META,self.calls)
 
 
 if __name__=='__main__':unittest.main()

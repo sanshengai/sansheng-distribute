@@ -522,6 +522,14 @@ def dispatch_component(request_path, action, profile, client_factory=APIClient):
     return result
 
 
+def synthetic_readback_ok(expected, observed, request_sent):
+    """平台对 containsSyntheticMedia=false 读回为 null/缺失；仅在会话请求已确实声明 false 时视为「否」。
+    expected=True 仍须严格读回 True。request_sent 必须来自上传检查点绑定的同一请求体摘要。"""
+    if type(expected) is not bool or request_sent is not True: return False
+    if expected: return observed is True
+    return observed is False or observed is None
+
+
 def dispatch(request_path, action, profile, client_factory=APIClient):
     if action in {'component','verify_component'}:
         return dispatch_component(request_path,action,profile,client_factory)
@@ -588,9 +596,12 @@ def dispatch(request_path, action, profile, client_factory=APIClient):
             or st.get('privacyStatus') != 'public'
             or st.get('selfDeclaredMadeForKids') != resource['status']['selfDeclaredMadeForKids']):
         raise PublishError('YouTube 独立读回不匹配；不标记成功')
-    if ('containsSyntheticMedia' in resource['status'] and
-            st.get('containsSyntheticMedia') != resource['status']['containsSyntheticMedia']):
-        raise PublishError('YouTube 合成媒体声明未读回')
+    if 'containsSyntheticMedia' in resource['status']:
+        sent_digest = cp.get('binding',{}).get('resource_digest') if isinstance(cp,dict) else None
+        if not synthetic_readback_ok(resource['status']['containsSyntheticMedia'],
+                                     st.get('containsSyntheticMedia', None) if 'containsSyntheticMedia' in st else None,
+                                     sent_digest == digest(resource)):
+            raise PublishError('YouTube 合成媒体声明未读回')
     if ('categoryId' in resource['snippet'] and sn.get('categoryId') != resource['snippet']['categoryId']):
         raise PublishError('YouTube 分类未读回')
     if st.get('uploadStatus') != 'processed': return observation

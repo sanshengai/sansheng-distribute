@@ -46,6 +46,7 @@ def filled_editor(anchor,pack,assets,bound,marker,endpoint):
     if len(header)!=12 or header[4:8]!=b'ftyp' or not 12<source.stat().st_size<=15*1024**3:
         raise PublishError('微博视频不是受支持的 MP4；未上传')
     with background_window(anchor,cdp_url=endpoint,retain=True) as page:
+        import douyin_focus;douyin_focus.hold(page)  # whole-window focus emulation, never foreground
         saved=dict(bound,target_id=target_id(page),state='owned_window_opened',
             tracking_scope='chrome_session_only',source_sha256=item['sha256'],
             source_size=source.stat().st_size,upload_events=[],upload_errors=[])

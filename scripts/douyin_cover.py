@@ -80,6 +80,12 @@ def encode(page, asset, role):
                 native_sha256=hashlib.sha256(native).hexdigest())
 
 
+def within(actual, source):
+    """Native transcoding may trim a 3:4 cover by a couple of pixels (2026-11-01:
+    1080x1440 saved as 1078x1440). Allow max(2px, 0.3%) per side; more is a crop."""
+    return all(abs(actual[k]-source[k]) <= max(2, round(source[k]*0.003)) for k in ('width','height'))
+
+
 def preview(page, role, *, include_object=False):
     image = unique(control(page, role).locator('img'), '已保存封面')
     value = image.evaluate('(n)=>({src:n.currentSrc,width:n.naturalWidth,height:n.naturalHeight,complete:n.complete})')
@@ -176,15 +182,35 @@ def upload(page, assets, prepared, *, progress, receipt):
         else:dialog.wait_for(state='hidden',timeout=15000)
     for role,source in prepared.items():
         progress('cover_'+role+'_readback')
-        page.wait_for_function('''label=>{
-          const ns=Array.from(document.querySelectorAll('[class^="coverControl-"]')).filter(n=>n.innerText.includes(label));
-          const im=ns.length===1?ns[0].querySelector('img'):null;
-          return im&&im.complete&&im.naturalWidth>0;
-        }''',arg=ROLES[role][0],timeout=15000)
+        # Wait for the saved image itself, not the pre-save preview that is already loaded
+        # (2026-11-01 S4E02: the check ran while the old src was still shown).
+        try:
+            page.wait_for_function('''([label,old])=>{
+              const ns=Array.from(document.querySelectorAll('[class^="coverControl-"]')).filter(n=>n.innerText.includes(label));
+              const im=ns.length===1?ns[0].querySelector('img'):null;
+              return im&&im.complete&&im.naturalWidth>0&&!old.includes(im.currentSrc);
+            }''',arg=[ROLES[role][0],originals[role]],timeout=20000)
+        except Exception as exc:
+            raise PublishError('抖音封面保存后预览未更新；不报告完成') from exc
         actual=preview(page,role,include_object=True)
         raw=control(page,role).locator('img').get_attribute('src')
-        if raw in originals[role] or abs(actual['width']-source['width'])>1 or abs(actual['height']-source['height'])>1:
+        if raw in originals[role] or not within(actual,source):
             raise PublishError('抖音封面保存结果未改变或发生额外裁切；不报告完成')
+        receipt(role,dict(actual,source_asset_id=source['source_asset_id'],source_sha256=source['source_sha256'],
+                          native_sha256=source['native_sha256']))
+    restore_video(page)
+
+
+def readback_only(page, prepared, *, progress, receipt):
+    """Resume only: the cover dialog already completed in this owned window but the
+    readback stopped. Re-read the saved native cover; never reopen or re-upload."""
+    for role,source in prepared.items():
+        progress('cover_'+role+'_readback')
+        if control(page,role).get_by_text('选择封面',exact=True).count():
+            raise PublishError('抖音封面尚未保存；不在续跑中补传')
+        actual=preview(page,role,include_object=True)
+        if not within(actual,source):
+            raise PublishError('抖音封面保存结果发生额外裁切；不报告完成')
         receipt(role,dict(actual,source_asset_id=source['source_asset_id'],source_sha256=source['source_sha256'],
                           native_sha256=source['native_sha256']))
     restore_video(page)
@@ -203,6 +229,20 @@ def verify(page, pack, saved):
                 or preview(page,role,include_object='source_object' in record)!={k:record.get(k) for k in fields}):
             raise PublishError('抖音已保存封面与原任务不符；不重传或改封面')
     if roles:restore_video(page)
+
+
+def published_matches(details, role, obj, record):
+    """The published work references either the uploaded object itself or (observed
+    2026-11-01) a platform copy under tos-cn-i-dy/. A copy is accepted only when the
+    published editor image dimensions match the saved upload receipt (within())."""
+    side={'portrait':'vertical','landscape':'horizontal'}[role]
+    uri=details['covers'][side]
+    if uri==obj['uri']:
+        return True
+    dims=(details.get('cover_dims') or {}).get(side)
+    return (isinstance(uri,str) and re.fullmatch(r'tos-cn-i-dy/[A-Za-z0-9_-]+',uri) is not None
+            and isinstance(dims,dict) and all(type(dims.get(k)) is int for k in ('width','height'))
+            and within(dims,record))
 
 
 def post_cover_bindings(details, pack, saved):
@@ -233,7 +273,7 @@ def post_cover_bindings(details, pack, saved):
                     or not isinstance(record['native_sha256'],str)
                     or not re.fullmatch(r'[0-9a-f]{64}',record['native_sha256'])
                     or any(type(record[k]) is not int or not 0<record[k]<=4096 for k in ('width','height'))
-                    or details['covers'][{'portrait':'vertical','landscape':'horizontal'}[role]]!=obj['uri']):
+                    or not published_matches(details,role,obj,record)):
                 raise ValueError()
         except (KeyError,TypeError,ValueError) as exc:
             raise PublishError('抖音发布封面不能对应原图及上传对象；不补造旧回执') from exc

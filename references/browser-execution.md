@@ -67,3 +67,10 @@ verify 按终点返回 draft_ready / prefill_ready / published；正式发布附
 2026-10-27 视频号助手实测：封面“编辑”入口可能早于视频裁剪处理完成出现，此时上传封面会被稍后的原生处理结果重置或关闭。等待视频处理时可先填写文案、话题、合集和声明；封面编辑须等同一原稿的原生处理成功，再确认编辑弹窗、保存按钮及保存后状态。此次观察到页面自身的 `post_clip_video` 成功响应含草稿身份；它仅作当前页面处理完成的证据，不作为独立发布 API 调用，也不硬编码为永久接口。换入口时重新核对当前完成信号。
 
 列表读回采用有界等待，以真实作品 ID 合并重复响应；同一 ID 多次返回不算重复投稿，同一封存标题对应不同 ID 则停止自动绑定并调查。提交后列表暂未返回只保留待核验状态，继续查询原任务；不能因固定等待时间结束或一次列表缺项而再次发表。每个执行/核验阶段仍独立读取，不复用上一阶段的响应作新证据。
+
+## 视频号后台标签实测（2026-11-02 S4）
+
+- 后台标签 `visibilityState=hidden` 时，位置下拉的进入动画（`zoom-in-top-enter`）停在高度 0，选项点击判为不可见。先对该页持有焦点模拟（`Emulation.setFocusEmulationEnabled` + `Page.setWebLifecycleState active`，同 `douyin_focus.hold`，不前置窗口），再点「位置」→可见的「不显示位置」；选中后位置区变为 `.post-position-wrap .not-display`，以此回读。
+- 原生上传回执：编辑器上传组件的 `fileList[0]`（name、size、extInfo 宽高时长、status=done、percent=100、httpsUrl）逐项与本地文件/ffprobe 比对；发表前页面不给 MD5，发表后用作品 `media[0].md5sum` 与原片核对。原生事件文件须在续接时先载入旧事件再追加，不能被新进程覆盖。
+- 原生分享链接：列表行分享图标在后台标签 hover 不触发浮层；打开该行组件自身的 `showFeedShareActionPopover` 并调用其 `handleShowFeedShareActionPopoverChange`，由页面自己的 getShortLink 生成 `https://weixin.qq.com/sph/...`（每次可能不同，均指向同一作品）。不读剪贴板。
+- 执行中途停在点击前（未点发表）时：执行接力仍存活就在同一任务、同一标签续接（核对编辑器全文/短标题与封存一致、无 post_create 痕迹），不重传、不新建任务。

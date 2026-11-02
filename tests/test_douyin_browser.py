@@ -33,13 +33,14 @@ class Node:
         return 1
     def is_visible(self):return self.count()==1
     def get_attribute(self,name):return 'video/mp4' if name=='accept' else None
+    def focus(self,**kw):return None
     def evaluate(self,script,*args):
+        if script==douyin.PLACE_CARET_END:return True
         if self.kind=='file':return not self.page.pending_file
         if self.kind=='video':
             value=dict(src=self.page.preview,duration=self.page.duration,ready=4)
-            if args:
-                data=self.page.uploads[0]
-                value.update(sha256=hashlib.sha256(data).hexdigest(),size=len(data),width=720,height=1280)
+            if script==douyin.douyin_video.READ:
+                value.update(width=720,height=1280)
             return value
         if self.kind=='description' and script==douyin.DESCRIPTION_READ:return self.page.description
         if self.kind=='description' and script==douyin.NATIVE_DOCUMENT_READ:
@@ -577,7 +578,8 @@ class DouyinTests(unittest.TestCase):
     def test_caret_moved_before_append_preserves_existing_text(self):
         self.with_topics();self.page.caret_at_end=False
         with self.assertRaisesRegex(PublishError,'光标不在末尾'):run(self.path,'douyin',self.profile,self.store)
-        self.assertEqual(self.page.description,'完整简介\n保留换行');self.assertEqual(self.page.topics,[])
+        # Multi-line bodies are written line by line; a moved caret stops before the second line.
+        self.assertEqual(self.page.description,'完整简介');self.assertEqual(self.page.topics,[])
 
     def test_duplicate_empty_or_unsupported_topics_rejected_before_connect(self):
         from platform_pack import build_pack

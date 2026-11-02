@@ -1,6 +1,7 @@
 """Hash the actual native Douyin preview bytes, without uploading or publishing."""
 from __future__ import annotations
 import math
+import time
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -10,30 +11,13 @@ from publish_core import PublishError, digest
 
 # An implementation memory bound, not a claimed platform upload limit.
 MAX_BYTES = 256 * 1024 * 1024
-READ = r'''async (n,expectedSize) => {
- const before=n.currentSrc,controller=new AbortController();
- const timer=setTimeout(()=>controller.abort(),30000);
- try {
-  if(!/^https:\/\/video-cn\.douyin\.com\//.test(before))throw Error('unknown source');
-  const r=await fetch(before,{cache:'force-cache',credentials:'omit',redirect:'error',signal:controller.signal});
-  if(r.status!==200 || r.type==='opaque' || !r.body)throw Error('source unavailable');
-  const reader=r.body.getReader(),parts=[];let size=0;
-  while(true){
-   const {value,done}=await reader.read();if(done)break;
-   size+=value.byteLength;
-   if(size>expectedSize){await reader.cancel();throw Error('oversized source');}
-   parts.push(value);
-  }
-  if(size!==expectedSize)throw Error('incomplete source');
-  const data=new Uint8Array(size);let i=0;
-  for(const part of parts){data.set(part,i);i+=part.byteLength;}
-  const sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',data))]
-   .map(n=>n.toString(16).padStart(2,'0')).join('');
-  if(n.currentSrc!==before)throw Error('source changed');
-  return {src:before,sha256,size,width:n.videoWidth,height:n.videoHeight,
-   duration:n.duration,ready:n.readyState};
- }finally{clearTimeout(timer);}
-}'''
+# Author decision (2026-11-01): the preview server only gives scripts part of the
+# bytes (later ranges 403, sometimes less than 8 MiB), so Douyin never reads preview
+# bytes. Upload proof is the native upload receipt (VID, size, width/height,
+# duration, storage object) matched to the local file in douyin_upload.receipt;
+# this only reads the player's own metadata. Duration and cover are read back
+# again on the published work.
+READ = r'''(n) => ({src:n.currentSrc,width:n.videoWidth,height:n.videoHeight,duration:n.duration,ready:n.readyState})'''
 
 
 def prepare(asset):
@@ -49,12 +33,16 @@ def observe(page, asset):
     if node.count() != 1 or not node.is_visible():
         raise PublishError('抖音原片字节核对不能唯一定位可见视频')
     try:
-        value = node.evaluate(READ, size)
+        value = node.evaluate(READ)
+        for _ in range(60):
+            # A just-uploaded background preview may need a moment to load metadata.
+            if type(value.get('ready')) is int and value['ready'] >= 1:
+                break
+            time.sleep(0.5); value = node.evaluate(READ)
         parts = urlsplit(value['src'])
         match = re.fullmatch(r'/(?:[^/]+/){2}(tos-cn-v-[A-Za-z0-9-]+/[A-Za-z0-9_-]+)', parts.path)
         if (parts.scheme != 'https' or parts.netloc != 'video-cn.douyin.com' or not match
-                or parts.fragment or value.get('sha256') != asset['sha256']
-                or type(value.get('size')) is not int or value['size'] != size
+                or parts.fragment
                 or any(type(value.get(k)) is not int or not 0 < value[k] <= 16384 for k in ('width', 'height'))
                 or type(value.get('ready')) is not int or value['ready'] < 1
                 or type(value.get('duration')) not in (int, float)
@@ -66,7 +54,9 @@ def observe(page, asset):
                     preview_key=digest([parts.netloc, match.group(1)]),
                     width=value['width'], height=value['height'], duration=value['duration'])
     except Exception as exc:
-        raise PublishError('抖音原生预览字节、来源或媒体信息不能与封存原片核对；不重传') from exc
+        known = ('source facts differ',)
+        reason = next((re.search(re.escape(k)+r'[ 0-9a-z]*', str(exc)).group(0) for k in known if k in str(exc)), type(exc).__name__)
+        raise PublishError('抖音原生预览字节、来源或媒体信息不能与封存原片核对（'+reason+'）；不重传') from exc
 
 
 def verify(page, pack, saved):

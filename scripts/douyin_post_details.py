@@ -84,7 +84,10 @@ def facts(body, listed, public_identity):
                 or not integer(v['width'],1,16384) or not integer(v['height'],1,16384)
                 or image_uri(a['Cover']['uri'])!=listed['cover_uri']
                 or image_uri(v['cover']['uri'])!=a['Cover']['uri']):raise ValueError()
-        horizontal=image_uri(a['horizontal_cover']['uri'])
+        # Only a 3:4 cover was set: Douyin leaves horizontal_cover.uri empty. An empty
+        # value means 'not set' (None); a non-empty one must still be a native image URI.
+        raw_h=a['horizontal_cover']['uri']
+        horizontal=None if raw_h=='' else image_uri(raw_h)
         from douyin_schedule import native_timer
         timer = native_timer(a)
         if timer is not None and (timer['state'] != 'online'
@@ -128,12 +131,20 @@ def observe(page,value,transcodes):
     if editor.declaration_control(page).inner_text()!=value['declaration']:
         raise PublishError('抖音编辑页 AI 声明与详情不符')
     for role,label in [('vertical','竖封面3:4'),('horizontal','横封面4:3')]:
+        if role=='horizontal' and value['covers'][role] is None:
+            continue  # no landscape cover was set; the editor shows a derived preview only
         section=page.locator('[class^="coverControl-"]').filter(has=page.get_by_text(label,exact=True))
         image=unique(unique(section,'已发布作品'+label).locator('img'),'已发布作品'+label+'图片')
-        state=image.evaluate('n=>({src:n.currentSrc,loaded:n.complete&&n.naturalWidth>0})')
-        if (not image.is_visible() or state['loaded'] is not True
-                or native_image_url(state['src'])!=value['covers'][role]):
-            raise PublishError('抖音编辑页横竖封面与详情不符')
+        for _ in range(20):  # the edit page loads cover images lazily after the form
+            state=image.evaluate('n=>({src:n.currentSrc,loaded:n.complete&&n.naturalWidth>0,width:n.naturalWidth,height:n.naturalHeight})')
+            if state['loaded'] is True:break
+            page.wait_for_timeout(500)
+        if not image.is_visible() or state['loaded'] is not True:
+            raise PublishError('抖音编辑页横竖封面未加载')
+        shown=native_image_url(state['src'])
+        if shown!=value['covers'][role]:
+            raise PublishError('抖音编辑页横竖封面与详情不符：%s 编辑页 %s 详情 %s'%(role,shown,value['covers'][role]))
+        value.setdefault('cover_dims',{})[role]=dict(width=state.get('width'),height=state.get('height'))
     mix=page.locator('[class^="mix-display-"] [class^="mix-name-"]')
     if value['collection']:
         label=unique(mix,'已发布作品合集预览')
@@ -167,7 +178,11 @@ def observe(page,value,transcodes):
 
 
 def read(page,card,listed,public_identity,bodies,wait):
-    click_background(page,card.get_by_text('编辑作品',exact=True))
+    import douyin_focus; douyin_focus.ensure(page)  # scroll/stability needs animation frames in a background window
+    entry=card.get_by_text('编辑作品',exact=True)
+    # Older works sit below the fold; bring the entry into view before the stability check.
+    if entry.count()==1 and hasattr(entry,'scroll_into_view_if_needed'):entry.scroll_into_view_if_needed(timeout=5000)
+    click_background(page,entry)
     wait(DETAIL_PATH);wait(TRANSCODE_PATH)
     page.locator(editor.TITLE).wait_for(state='visible',timeout=15000)
     page.wait_for_function('''()=>{const n=document.querySelector('video');return n&&n.readyState>=1&&n.videoWidth>0;}''',timeout=30000)

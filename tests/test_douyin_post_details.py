@@ -174,3 +174,22 @@ class DouyinDetailTests(unittest.TestCase):
                 if name=='合集·系列' and visible:detail.observe(page,value,receipts)
                 else:
                     with self.subTest(name=name,visible=visible),self.assertRaises(PublishError):detail.observe(page,value,receipts)
+
+
+class EmptyHorizontalCoverTests(unittest.TestCase):
+    def test_empty_horizontal_means_not_set_and_is_skipped(self):
+        import douyin_post_details as d
+        src=Path(d.__file__).read_text()
+        self.assertIn("horizontal=None if raw_h=='' else image_uri(raw_h)",src)
+        self.assertIn("if role=='horizontal' and value['covers'][role] is None:",src)
+        with self.assertRaises(d.PublishError):d.image_uri('')
+
+
+class LazyCoverTests(unittest.TestCase):
+    def test_edit_page_cover_waits_for_lazy_load_and_reports_mismatch(self):
+        import douyin_post_details as d
+        src=Path(d.__file__).read_text()
+        self.assertIn("for _ in range(20):",src)
+        self.assertIn("page.wait_for_timeout(500)",src)
+        self.assertIn("抖音编辑页横竖封面未加载",src)
+        self.assertIn("编辑页 %s 详情 %s",src)

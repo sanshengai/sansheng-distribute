@@ -76,6 +76,32 @@ class UploadTests(unittest.TestCase):
             p=copy.deepcopy(preview);p[key]=value
             with self.subTest(key=key),self.assertRaises(PublishError):upload.receipt([event],local,p,now=101)
 
+    def test_null_native_md5_relies_on_player_bytes_size_dimensions_duration(self):
+        local,preview,body,event=sample()
+        b=copy.deepcopy(body);b['Result']['Results'][0]['VideoMeta']['Md5']=None
+        e=dict(upload.native(b),observed_at=100)
+        self.assertEqual(upload.receipt([e],local,preview,now=101)['source_sha256'],'a'*64)
+        for field,value in [('Size',201),('Width',1280),('Height',720),('Duration',4.2),('Uri','tos-cn-v-fixture/otherObject')]:
+            x=copy.deepcopy(e);x['metadata'][field]=value
+            with self.subTest(field=field),self.assertRaises(PublishError):upload.receipt([x],local,preview,now=101)
+        for key,value in [('source_sha256','c'*64),('size',201)]:
+            p=copy.deepcopy(preview);p[key]=value
+            with self.subTest(key=key),self.assertRaises(PublishError):upload.receipt([e],local,p,now=101)
+        for bad in ('',0,False,'B'*32):
+            x=copy.deepcopy(b);x['Result']['Results'][0]['VideoMeta']['Md5']=bad
+            with self.subTest(md5=bad),self.assertRaises(PublishError):upload.native(x)
+        # A null receipt and a hex receipt for the same upload are different identities.
+        with self.assertRaises(PublishError):upload.receipt([event,dict(e,observed_at=101)],local,preview,now=102)
+
+    def test_missing_native_md5_equals_null_but_other_fields_still_required(self):
+        local,preview,body,event=sample()
+        b=copy.deepcopy(body);del b['Result']['Results'][0]['VideoMeta']['Md5']
+        e=dict(upload.native(b),observed_at=100);self.assertIsNone(e['metadata']['Md5'])
+        self.assertEqual(upload.receipt([e],local,preview,now=101)['vid'],VID)
+        for field in ('Size','Width','Height','Duration','Uri'):
+            x=copy.deepcopy(b);del x['Result']['Results'][0]['VideoMeta'][field]
+            with self.subTest(field=field),self.assertRaises(PublishError):upload.native(x)
+
     def test_multiple_vids_clock_errors_and_empty_input_rejected(self):
         local,preview,_,event=sample()
         other=dict(event,vid='vOtherFixture1234567890',observed_at=101)

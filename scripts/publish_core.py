@@ -1375,7 +1375,7 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
     job = store.status(key)
     if recover_remote_id is not None:
         _nonempty(recover_remote_id, '候选远端 ID')
-        allowed_recovery = (recovery_platform=='wechat' and target['platform']=='wechat' and target['endpoint']=='draft') or (recovery_platform in {'x','weibo'} and target['platform']==recovery_platform and target['endpoint']=='publish')
+        allowed_recovery = (recovery_platform=='wechat' and target['platform']=='wechat' and target['endpoint']=='draft') or (recovery_platform in {'x','weibo','wechat_channels'} and target['platform']==recovery_platform and target['endpoint']=='publish')
         if (not resume or advance or adopt or not allowed_recovery
                 or job['state'] != 'submission_unknown' or job.get('remote_id')):
             raise PublishError('恢复绑定只适用于平台与终点匹配、无远端 ID 的未知提交任务')
@@ -1481,6 +1481,11 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
             from youtube_adapter import preflight_youtube
             preflight_youtube(manifest, target, profile, config['verify'], expected_action='verify', bundle=True, recovery=True)
         observation = invoke(config, "verify", request_path, lock_fd=lock_fd)
+        if (recover_remote_id is None and target['platform'] == 'wechat_channels'
+                and request['job']['state'] == 'submission_unknown' and not request['job'].get('remote_id')
+                and observation.get('state') != 'not_submitted' and observation.get('remote_id')):
+            # A plain resume must not adopt whatever Channels post the relay saw.
+            raise PublishError('视频号无远端 ID 的未知提交须用 recover-wechat_channels 指定候选作品并核验来源，保持未知提交状态')
         if recover_remote_id is not None and (observation.get('remote_id') != recover_remote_id
                 or observation.get('recovery_verified') is not True):
             message = ('候选草稿未经官方正文与封面核验' if recovery_platform=='wechat'

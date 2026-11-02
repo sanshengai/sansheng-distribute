@@ -1,0 +1,43 @@
+{
+ "schema_version": 1,
+ "observed_basis": "2026-11-02；见 references/platform-fields.md",
+ "modes": {
+  "auto": "代码填写并独立读回",
+  "checklist": "规则+执行器清单逐项操作，读回不完整",
+  "unsupported": "该路线不支持，须显式标出",
+  "not_applicable": "平台无此选项，不要求"
+ },
+ "field_keys": {
+  "title": ["title", "text"],
+  "description": ["description", "text"],
+  "topics": ["tags", "topics"],
+  "collection": ["platform_metadata.collection_name", "platform_metadata.collection_id", "platform_metadata.playlist", "platform_metadata.playlist_id"],
+  "ai_declaration": ["platform_metadata.ai_generated", "platform_metadata.declaration", "platform_metadata.altered_content"],
+  "original": ["platform_metadata.copyright", "platform_metadata.creation_type", "platform_metadata.declare_original"],
+  "cover": ["cover", "cover_asset_id", "platform_metadata.cover_assets"],
+  "activity": ["platform_metadata.activity"]
+ },
+ "platforms": {
+  "bilibili_cli": {"route": "biliup CLI + bilibili_adapter 读回", "cover_ratio": "16:9", "last_verified": "2026-11-01", "evidence": "chuxin-s4-bilibili-20261101/B站S4回执.private.json",
+   "fields": {"title": "auto", "description": "auto", "topics": "auto", "native_topic": "unsupported", "collection": "unsupported", "ai_declaration": "auto", "original": "auto", "cover": "auto", "activity": "unsupported"},
+   "notes": {"topics": "仅投稿标签(tag)；不是原生话题", "collection": "CLI 路线不归入合集，需网页补"}},
+  "bilibili_web": {"route": "创作中心网页（本 Skill 未实现执行器）", "cover_ratio": "16:9/4:3", "last_verified": null, "evidence": "未实测",
+   "fields": {"title": "checklist", "description": "checklist", "topics": "checklist", "native_topic": "checklist", "collection": "checklist", "ai_declaration": "checklist", "original": "checklist", "cover": "checklist", "activity": "checklist"}},
+  "douyin": {"route": "douyin_publish_browser 内置引擎", "cover_ratio": "3:4（可选横封面）", "last_verified": "2026-11-02", "evidence": "chuxin-s4-douyin-20261101/进度.md；douyin_post_details 读回",
+   "fields": {"title": "auto", "description": "auto", "topics": "auto", "collection": "auto", "ai_declaration": "auto", "original": "not_applicable", "cover": "auto", "activity": "checklist"}},
+  "weibo": {"route": "weibo_video_publish_browser 内置引擎", "cover_ratio": "3:4", "last_verified": "2026-11-01", "evidence": "chuxin-s4-weibo-20261101/进度.md；S3 回执 topic_struct/statement 读回",
+   "fields": {"title": "auto", "description": "auto", "topics": "auto", "collection": "unsupported", "ai_declaration": "auto", "original": "auto", "cover": "auto", "activity": "unsupported"}},
+  "wechat_channels": {"route": "视频号助手网页，任务目录脚本 + 执行器清单", "cover_ratio": "3:4", "last_verified": "2026-10-31", "evidence": "chuxin-s3-wxchannels-20261031/视频号S3E0x最终独立读回；channels_post.readback unverified_fields",
+   "fields": {"title": "checklist", "description": "checklist", "topics": "checklist", "collection": "checklist", "ai_declaration": "checklist", "original": "checklist", "cover": "checklist", "activity": "checklist"}},
+  "alipay": {"route": "生活号网页，任务目录脚本 + 执行器清单", "cover_ratio": "3:4", "last_verified": "2026-11-01", "evidence": "chuxin-s4-alipay-20261101/S4E0x-verify.json（标题/状态/封面图）",
+   "fields": {"title": "checklist", "description": "checklist", "topics": "checklist", "collection": "checklist", "ai_declaration": "checklist", "original": "checklist", "cover": "checklist", "activity": "unsupported"},
+   "notes": {"original": "表单出现原创选项时必须设置"}},
+  "youtube": {"route": "YouTube Data API（youtube_adapter + bundle/component）", "cover_ratio": "16:9", "last_verified": "2026-11-01", "evidence": "chuxin-s4-youtube-20261101/进度.md（视频/封面目视/播放列表 verified）",
+   "fields": {"title": "auto", "description": "auto", "topics": "auto", "collection": "auto", "ai_declaration": "auto", "original": "not_applicable", "cover": "auto", "activity": "not_applicable"},
+   "notes": {"topics": "API tags + 简介内 #话题文本", "collection": "播放列表，按季新建"}},
+  "x": {"route": "x_publish_browser 网页（作者书面授权）", "cover_ratio": "无", "last_verified": "2026-11-01", "evidence": "chuxin-s3-x-20261031/X-S3回执.md",
+   "fields": {"title": "not_applicable", "description": "auto", "topics": "auto", "collection": "not_applicable", "ai_declaration": "not_applicable", "original": "not_applicable", "cover": "not_applicable", "activity": "not_applicable"},
+   "notes": {"topics": "正文井号文本，非原生实体"}}
+ },
+ "aliases": {"bilibili": "bilibili_cli", "wxchannels": "wechat_channels"}
+}

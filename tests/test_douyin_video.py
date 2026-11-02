@@ -16,7 +16,7 @@ class Node:
     def __init__(self,value):self.value=value;self.visible=True;self.n=1
     def count(self):return self.n
     def is_visible(self):return self.visible
-    def evaluate(self,script,size):return copy.deepcopy(self.value)
+    def evaluate(self,script,*args):return copy.deepcopy(self.value)
 
 
 class Page:
@@ -43,12 +43,12 @@ class VideoTests(unittest.TestCase):
         saved=dict(source_video=actual)
         self.assertTrue(video.verify(self.page,dict(assets=[self.asset]),saved))
 
-    def test_equal_length_different_content_rejected(self):
-        self.page.node.value['sha256']='0'*64
-        with self.assertRaises(PublishError):video.observe(self.page,self.asset)
+    def test_never_reads_preview_bytes(self):
+        self.assertNotIn('fetch',video.READ);self.assertNotIn('Range',video.READ)
+        self.assertNotIn('sha256',video.READ)
 
     def test_source_size_and_media_shape_rejected(self):
-        for key,value in [('size',True),('size',2),('width',True),('height',0),('ready',False),
+        for key,value in [('width',True),('height',0),('ready',False),
                           ('duration',float('nan')),('duration',0),('duration',True)]:
             with self.subTest(key=key,value=value):
                 bad=copy.deepcopy(self.value);bad[key]=value
@@ -74,7 +74,7 @@ class VideoTests(unittest.TestCase):
             with self.assertRaises(PublishError):video.prepare(self.asset)
 
     def test_local_change_during_native_read_rejected(self):
-        def read(*args):self.path.write_bytes(b'changed');return self.value
+        def read(*args):self.path.write_bytes(b'changed');return copy.deepcopy(self.value)
         with patch.object(self.page.node,'evaluate',side_effect=read):
             with self.assertRaises(PublishError):video.observe(self.page,self.asset)
 

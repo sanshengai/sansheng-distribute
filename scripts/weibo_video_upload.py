@@ -62,6 +62,62 @@ NATIVE_SOURCE = '''async()=>{
 }'''
 
 
+# The native SDK reads width/height/duration with a 1-second <video> probe and
+# silently keeps only {isPanorama:false} on timeout (seen in an unfocused task
+# window).  Re-read the SDK a bounded number of times, then decode the SDK's own
+# current File locally.  Upper bound: 8 x 1.25 s + 3 x 8 s = 34 s.  Nothing is
+# uploaded, clicked or written into the app; still-missing metadata stops as before.
+META_SDK_POLLS = 8
+META_SDK_POLL_MS = 1250
+META_FILE_ATTEMPTS = 3
+META_FILE_TIMEOUT_MS = 8000
+FILE_META = '''async timeout=>{
+ const queue=[document.querySelector('#app')?._vnode],seen=new Set(),found=[];
+ let count=0;
+ while(queue.length){
+   if(count>=2000)throw Error('native tree limit');
+   const n=queue.shift();if(!n||typeof n!=='object'||seen.has(n))continue;
+   seen.add(n);count++;
+   if(n.component){
+     const c=n.component,d=c.data||{},u=d.wbUploader;
+     if(u&&/^video_button_upload_[0-9]+$/.test(d.id||''))found.push(u);
+     queue.push(c.subTree);
+   }
+   if(Array.isArray(n.children))queue.push(...n.children);
+   if(Array.isArray(n.dynamicChildren))queue.push(...n.dynamicChildren);
+   if(n.ssContent)queue.push(n.ssContent);
+ }
+ if(found.length!==1)throw Error('uploader not unique');
+ const f=found[0].currFile;
+ if(Object.prototype.toString.call(f)!=='[object File]')throw Error('no current file');
+ return await new Promise(ok=>{const url=URL.createObjectURL(f),v=document.createElement('video');
+   const done=r=>{clearTimeout(t);try{v.src='';URL.revokeObjectURL(url)}catch(e){};ok(r)};
+   const t=setTimeout(()=>done({}),timeout);
+   v.preload='metadata';v.muted=true;
+   v.onloadedmetadata=()=>done({width:v.videoWidth,height:v.videoHeight,duration:v.duration});
+   v.onerror=()=>done({});v.src=url;});
+}'''
+_META = ('width', 'height', 'duration')
+
+
+def _missing_meta(native):
+    return isinstance(native, dict) and any(native.get(k) is None for k in _META)
+
+
+def _complete_meta(page, native):
+    """Bounded wait for metadata the SDK failed to record; never invokes the SDK."""
+    for _ in range(META_SDK_POLLS):
+        if not _missing_meta(native):return native
+        page.wait_for_timeout(META_SDK_POLL_MS)
+        native = page.evaluate(NATIVE_SOURCE)
+    for _ in range(META_FILE_ATTEMPTS):
+        if not _missing_meta(native):return native
+        meta = page.evaluate(FILE_META, META_FILE_TIMEOUT_MS)
+        if isinstance(meta, dict) and all(meta.get(k) is not None for k in _META):
+            native = dict(native, **{k: meta[k] for k in _META})
+    return native
+
+
 def observe_source(page, asset, saved, *, cover_editing=False):
     """Read the native SDK's current File and media ID, without invoking it.
 
@@ -80,6 +136,7 @@ def observe_source(page, asset, saved, *, cover_editing=False):
                 raise ValueError('native cover editor not visible')
         elif not page.evaluate(READY):raise ValueError('completion not visible')
         native = page.evaluate(NATIVE_SOURCE)
+        native = _complete_meta(page, native)
     except Exception as exc:
         raise PublishError('微博原生上传器状态无法完整只读核对；不重传') from exc
     source = Path(checked_path(asset)); chunks = []; original = hashlib.sha256()
@@ -218,7 +275,11 @@ class Capture:
         origins = {'/2/fileplatform/init.json': 'fileplatform.api.weibo.com',
                    '/2/fileplatform/upload.json': 'up.video.weibocdn.com',
                    '/2/fileplatform/check.json': 'fileplatform.api.weibo.com'}
-        if u.scheme != 'https' or u.netloc != origins.get(u.path):
+        # Weibo load-balances chunk uploads across regional hosts (2026-11-01 S4E07:
+        # chunks 3-8 went to upbj.video.weibocdn.com and were silently dropped).
+        host_ok = (u.netloc == origins.get(u.path) or (u.path == '/2/fileplatform/upload.json'
+                   and re.fullmatch(r'up[a-z]{0,4}\.video\.weibocdn\.com', u.netloc or '')))
+        if u.scheme != 'https' or not host_ok:
             return
         try:
             if len(self.events) >= 4096:

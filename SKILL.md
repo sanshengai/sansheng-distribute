@@ -13,7 +13,7 @@ metadata:
 
 读取私有 profile 的 `distribution_preferences` 后再选择路线与并行数；该字段是作者偏好，不能扩大 `accounts`、已验收能力或授权终点。未配置的平台不因偏好表中出现就自动登录或启用。
 
-首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。
+首次安装读 [配置与诊断](references/setup.md)；多目标任务读 [批量分发](references/campaign.md)；社交平台发布包与执行读 [平台适配](references/social-adapters.md)。先读 [平台能力与证据](references/platforms.md)。为视频准备各平台标题、简介、话题、相关活动、声明、合集，以及每次分发复盘时读 [平台文案](references/platform-copywriting.md)；封存前按 [平台填写项矩阵](references/platform-fields.md) 运行 `scripts/fields_check.py` 报告缺项和该路线不支持的字段；接收新内容读 [交接与运行](references/handoff.md)；公众号操作读 [公众号流程](references/wechat.md)；浏览器接力读 [Agent 浏览器执行](references/browser-execution.md)；超时或无远端 ID 读 [恢复流程](references/recovery.md)；安装、能力试验与跨 Agent 验收读 [验收方法](references/acceptance.md)。不默认加载全部历史材料。修改本 Skill 前后按 [双向同步规则](references/sync.md) 运行 `scripts/skill_sync.py status`，真源是作者 Mac 工作区，推送只走 fast-forward 且须测试与脱敏扫描通过。
 
 需要发现评论、汇总待处理互动或回复时，先读 [互动流程](references/interaction.md) 和 [平台能力与限制](references/interaction-platforms.md)，再按需读 [YouTube 评论候选](references/youtube-comments.md)；已有网友草稿接力发送时读 [YouTube 草稿队列](references/interaction-youtube-queue.md)。YouTube 使用官方 API 并需单独授权；目前仅单账号查询、自评论及自回复完成真实读回，统一发送队列仅经离线验收，其他平台和他人评论回复不能据此视为已验收。收件箱只读同步不会自动发送，平台不支持或权限未获批时不得虚报可用。
 
@@ -29,13 +29,13 @@ B站评论可显式试用[只读候选及有限观察](references/bilibili-comme
 
 了解本地支持的交接类型与已配置规则时，运行 `python3 scripts/publish.py platform-guide <平台>`，按需读[平台交接查询](references/platform-guide.md)；它不联网，也不证明平台能力已验收。扩展路线和竞品取舍见[分发架构](references/architecture.md)。
 
-视频改标题或换封面后再分发，先用[同视频候选查询](references/duplicate-check.md)检查同一私有账本；候选或无记录均不代替平台核验。需要呈现封面、合集、声明、话题的已核验情况时，按[分项观察](references/component-results.md)记录证据，未核验不能写成成功。若作者明确配置节奏，按[发布间隔](references/pacing.md)执行；本地间隔不代表平台规则或风控保证。
+视频改标题或换封面后再分发，先用[同视频候选查询](references/duplicate-check.md)检查同一私有账本；候选或无记录均不代替平台核验。需要呈现封面、合集、声明、话题的已核验情况时，按[分项观察](references/component-results.md)记录证据，未核验不能写成成功。若作者明确配置节奏，按[发布间隔](references/pacing.md)执行；本地间隔不代表平台规则或风控保证。多平台网页发布时按[网页发布节奏](references/web-posting-pacing.md)用 `scripts/pacing.py` 交错排程（上传后随机停留、不均匀间隔、每日上限），同样不保证规避风控。
 
 多目标首次执行前，用 `batch-preflight <manifest>` 一次收齐所选平台的本地阻塞，再准备和执行；已有任务沿原账本查询恢复。它不联网、不建任务或授权，本地通过不代表登录或发布通过。API路线先用已验证的适配器；没有可用接口的平台复用已有浏览器流程，不因提效任务默认扩大到新发送引擎。
 
 显式选用包内浏览器引擎时读 [内置引擎](references/browser-engines.md)：X 与微博的文字、多图、视频，以及抖音视频已做真实预填与只读续跑；X/微博视频核对原片字节和原生云端回执，微博另验封面、类型/声明，抖音另验横竖封面、原生话题、声明和指定合集。预填终点不发送，临时编辑会话每次复用重新核对。
 
-X 官方规则禁止非 API 网站脚本：历史浏览器实测只证明技术表现，不代表平台许可；默认提供本地发布包供作者手动发布，或使用有资格且已授权的官方 API。X 单 MP4 曾完成真实系列发送与独立读回，微博单视频已完成真实发送及缺失作品 ID 的候选恢复；这些单账号实测不自动开放其他账号。文字、多图和抖音发送仍分别按验收证据判断；各自支持范围和未覆盖字段见内置引擎。首次试验按 [验收方法](references/acceptance.md) 绑定具体内容，不以已有作品读回代替本次发送验收。
+X 官方规则禁止非 API 网站脚本：历史浏览器实测只证明技术表现，不代表平台许可；默认提供本地发布包供作者手动发布，或使用有资格且已授权的官方 API。作者已书面授权并知悉风险时的网页路线，按 [X 网页发帖实践](references/x-web-posting-practice.md) 执行（不均匀间隔、每日上限、文案差异化、遇风控硬停止）。X 单 MP4 曾完成真实系列发送与独立读回，微博单视频已完成真实发送及缺失作品 ID 的候选恢复；这些单账号实测不自动开放其他账号。文字、多图和抖音发送仍分别按验收证据判断；各自支持范围和未覆盖字段见内置引擎。首次试验按 [验收方法](references/acceptance.md) 绑定具体内容，不以已有作品读回代替本次发送验收。
 
 先解析当前 `SKILL.md` 所在真实目录作为 Skill 根；下列 `scripts/...` 路径相对该目录，不相对用户工程。核心需 macOS/Linux、Python 3.10+ 及执行本机命令的工具（使用 POSIX 文件锁）；不能据此宣称支持 Windows。核心仅用标准库，平台另有依赖：公众号使用本包内置官方 API（旧配置的显式 Write 模块仍兼容），补媒体还需当前 Agent 的浏览器能力。
 

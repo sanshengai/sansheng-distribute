@@ -60,16 +60,39 @@ def native(body):
         result = results[0]; value = result['VideoMeta']; vid = result['Vid']
         if (not isinstance(vid, str) or not re.fullmatch(r'v[A-Za-z0-9_-]{15,79}', vid)
                 or not isinstance(value, dict)
-                or not isinstance(value['Md5'], str) or not re.fullmatch(r'[0-9a-f]{32}', value['Md5'])
+                # Observed 2026-10-31: native commit may return Md5=null. Only an exact
+                # null is tolerated; receipt() then relies on the player-byte SHA-256.
+                or not (value.get('Md5') is None or isinstance(value['Md5'], str)
+                        and re.fullmatch(r'[0-9a-f]{32}', value['Md5']))
                 or not integer(value['Size'])
                 or not number(value['Duration']) or not 0 < value['Duration'] <= 86400
                 or not integer(value['Width'], 1, 16384) or not integer(value['Height'], 1, 16384)
                 or not isinstance(value['Uri'], str)
                 or not re.fullmatch(r'tos-cn-v-[A-Za-z0-9-]+/[A-Za-z0-9_-]+', value['Uri'])):
             raise ValueError()
-        return dict(vid=vid, metadata={k: value[k] for k in META_FIELDS})
+        # Observed 2026-11-01: the native commit may omit Md5 entirely; treat as null.
+        return dict(vid=vid, metadata={k: value.get(k) if k == 'Md5' else value[k] for k in META_FIELDS})
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise PublishError('抖音原生视频提交回执缺失、失败或字段尚未覆盖') from exc
+
+
+def sanitized_candidate(data):
+    """Fixed fields only (Vid + VideoMeta primitives); never tokens or URLs."""
+    try:
+        body = json.loads(data); result = body['Result']['Results'][0]; meta = result['VideoMeta']
+        vid = result['Vid']
+        if not isinstance(vid, str) or not re.fullmatch(r'v[A-Za-z0-9_-]{15,79}', vid): return None
+        checks = dict(Md5=lambda v: v is None or isinstance(v, str) and re.fullmatch(r'[0-9a-f]{32}', v),
+                      Size=lambda v: integer(v), Duration=lambda v: number(v),
+                      Width=lambda v: integer(v, 1, 16384), Height=lambda v: integer(v, 1, 16384),
+                      Uri=lambda v: isinstance(v, str) and re.fullmatch(r'tos-cn-v-[A-Za-z0-9-]+/[A-Za-z0-9_-]+', v))
+        out = {k: (meta.get(k) if checks[k](meta.get(k)) else 'unrecognized') for k in META_FIELDS if k != 'Uri'}
+        # Object path kept only as the same digest used for the verified preview key.
+        out['uri_preview_key'] = (digest(['video-cn.douyin.com', meta['Uri']])
+                                  if checks['Uri'](meta.get('Uri')) else 'unrecognized')
+        return dict(vid=vid, metadata=out)
+    except Exception:
+        return None
 
 
 class Capture:
@@ -97,6 +120,15 @@ class Capture:
                 # Names are fixed, values are types only. Never persist tokens,
                 # request headers, raw responses or arbitrary server key names.
                 shape = {k: type(body.get(k)).__name__ for k in ('ResponseMetadata', 'Result')}
+                if isinstance(body.get('ResponseMetadata'), dict):
+                    # Type only; tells whether a native Error object caused rejection.
+                    err = body['ResponseMetadata'].get('Error')
+                    shape['ResponseMetadata_Error'] = type(err).__name__
+                    if isinstance(err, dict):
+                        # Platform error codes/messages are not credentials; keep short scalars only.
+                        shape['ResponseMetadata_Error_fields'] = {
+                            str(k)[:40]: (v[:200] if isinstance(v, str) else v if type(v) in (int, float, bool) or v is None
+                                          else type(v).__name__) for k, v in list(err.items())[:10]}
                 result = body.get('Result')
                 if isinstance(result, dict):
                     values = result.get('Results')
@@ -108,7 +140,8 @@ class Capture:
                             shape['Vid'] = type(values[0].get('Vid')).__name__
                             shape['VideoMeta'] = type(meta).__name__
                             if isinstance(meta, dict):
-                                shape['VideoMeta_fields'] = {k: type(meta.get(k)).__name__ for k in META_FIELDS}
+                                shape['VideoMeta_fields'] = {k: type(meta.get(k)).__name__ if k in meta else 'missing'
+                                                             for k in META_FIELDS}
             phase = 'native_fields'
             event = dict(native(body), observed_at=time.time())
             self.events.append(event)
@@ -123,6 +156,10 @@ class Capture:
                 body_bytes=len(data) if isinstance(data, bytes) else None,
                 body_sha256=hashlib.sha256(data).hexdigest() if isinstance(data, bytes) else None,
                 field_types=shape))
+            candidate = sanitized_candidate(data) if phase == 'native_fields' else None
+            if candidate is not None:
+                # Keep the native identity fields so a later author decision has evidence.
+                self.diagnostics[-1]['native_identity_candidate'] = candidate
             self.errors.append('native_video_commit_unrecorded')
             try: self.save(self.events, self.errors)
             except Exception: pass
@@ -148,7 +185,8 @@ def receipt(events, local, preview, *, now=None):
             stamp = event['observed_at']; vid = event['vid']; meta = event['metadata']
             validated = native(dict(ResponseMetadata={}, Result=dict(Results=[dict(Vid=vid, VideoMeta=meta)])))
             if (not number(stamp) or stamp < previous or stamp > now + 5
-                    or meta['Md5'] != local['md5'] or meta['Size'] != local['size']
+                    or (meta['Md5'] is not None and meta['Md5'] != local['md5'])
+                    or meta['Size'] != local['size']
                     or meta['Width'] != preview['width'] or meta['Height'] != preview['height']
                     or not number(preview['duration']) or abs(meta['Duration'] - preview['duration']) > 0.05
                     or digest(['video-cn.douyin.com', meta['Uri']]) != preview['preview_key']):

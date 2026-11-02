@@ -289,6 +289,11 @@ def readback(anchor, pack, identity, accepted, *, expected_media=None, cdp_url=N
                 except Exception:
                     errors.append('native_detail_unavailable')
         page.on('response', observe)
+        try:
+            from x_compose_ready import emulate_focus
+            emulate_focus(page)  # hidden background windows never render the detail
+        except Exception:
+            pass
         page.goto(url, wait_until='domcontentloaded', timeout=25000)
         render_background_page(page)
         page.locator('[data-testid="tweet"]').first.wait_for(state='attached', timeout=20000)

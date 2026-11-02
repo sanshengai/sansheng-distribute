@@ -155,8 +155,18 @@ def dispatch(request_path,action,profile,*,timeout=1800):
     else:
         work['upstream_started']=previous.get('upstream_started',False)
     write_json(work_path(request_path),work)
+    if action=='verify' and request.get('recovery_remote_id'):
+        work['recovery_remote_id']=request['recovery_remote_id']
+        work['instructions']=('只读核对指定候选作品：同账号、作品ID一致、全文/短标题/合集与封存一致，'
+                              '原生媒体MD5与封存原片一致；全部满足才回 recovery_verified=true、source_md5_match=true。')
+        write_json(work_path(request_path),work)
     observed=agent_adapter.dispatch(request_path,action,timeout=timeout)
-    return validate_observation(observed,pack,identity,action)
+    observed=validate_observation(observed,pack,identity,action)
+    if action=='verify' and request.get('recovery_remote_id') and observed.get('recovery_verified') is True:
+        if (observed.get('remote_id')!=request['recovery_remote_id'] or observed.get('source_md5_match') is not True
+                or observed.get('content_verified') is not True):
+            raise PublishError('候选作品的身份、内容或原片来源未核对一致，保持未知提交状态')
+    return observed
 
 
 def main():

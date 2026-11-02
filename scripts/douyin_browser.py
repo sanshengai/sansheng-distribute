@@ -13,6 +13,7 @@ from browser_runtime import background_tab, background_window, browser_config, c
 from platform_pack import build_pack
 from publish_core import PublishError, digest, read_json, write_json
 import douyin_cover
+import douyin_focus
 import douyin_video
 import douyin_upload
 import douyin_schedule
@@ -57,6 +58,12 @@ NATIVE_DOCUMENT_READ = '''(n) => {
   }).join('\\n');
   return {text,topics};
 }'''
+PLACE_CARET_END = '''(n) => {
+  const lines=Array.from(n.children);const last=lines.length?lines[lines.length-1]:n;
+  const r=document.createRange();r.selectNodeContents(last);r.collapse(false);
+  const s=getSelection();s.removeAllRanges();s.addRange(r);return true;
+}'''
+
 CARET_AT_END = '''(n) => {
   const s=getSelection();
   if(!s || !s.rangeCount || !s.isCollapsed || !n.contains(s.anchorNode)) return false;
@@ -176,10 +183,18 @@ def assert_identity(page, expected):
     # The editor exposes a nickname only. A temporary native homepage in the
     # SAME context independently exposes the stable Douyin ID; never export cookies.
     with background_tab(page) as identity:
-        identity.goto(HOME, wait_until='domcontentloaded', timeout=15000)
+        # The temporary homepage is a background tab too; without focus emulation Chrome
+        # may throttle it and the ID never renders in time (2026-11-02 S4E08 timeout).
+        douyin_focus.hold(identity)
+        identity.goto(HOME, wait_until='domcontentloaded', timeout=30000)
         origin(identity, '/creator-micro/home')
         number = identity.get_by_text(re.compile(r'^抖音号[：:]?')).filter(visible=True)
-        number.wait_for(state='visible', timeout=15000)
+        try:
+            number.wait_for(state='visible', timeout=30000)
+        except Exception as exc:
+            if 'Timeout' not in type(exc).__name__:
+                raise
+            raise PublishError('抖音原生首页账号编号未在 30 秒内出现；不继续填稿') from exc
         if number.count() != 1:
             raise PublishError('抖音原生首页账号编号不是唯一')
         actual = re.sub(r'^抖音号\s*[：:]?\s*', '', number.inner_text())
@@ -246,6 +261,21 @@ def wait_document(page, expected):
         raise PublishError('抖音原生话题与完整文案读回不符')
 
 
+def write_text(field, text):
+    """Write possibly multi-line text into the empty native editor.
+
+    field.fill() with a literal newline creates lines carrying a hidden line marker
+    that the editor serializes as "\n*" on submit (2026-11-01: published captions
+    showed "*本集…"; captured update request had caption "第一行\n*第二行"). Native
+    Enter does not. So fill only the first line, then append the rest with Enter.
+    """
+    first, sep, rest = text.partition('\n')
+    field.fill(first)
+    if sep:
+        field.focus(timeout=5000); field.evaluate(PLACE_CARET_END)
+        append_text(field, '\n' + rest)
+
+
 def append_text(field, text):
     if not field.evaluate(CARET_AT_END):
         raise PublishError('抖音简介光标不在末尾；不猜测插入位置')
@@ -260,10 +290,10 @@ def append_text(field, text):
 def fill_description(page, pack, *, progress=lambda phase: None):
     field = page.locator(DESCRIPTION); names = topic_names(pack)
     if not names:
-        field.fill(pack['fields']['composed_text'])
+        write_text(field, pack['fields']['composed_text'])
         return
     fields = pack['fields']; body = fields['text'] or fields['description']
-    field.fill(body)
+    write_text(field, body)
     wait_document(page, dict(text=body, topics=[]))
     current = body
     if body:
@@ -271,6 +301,10 @@ def fill_description(page, pack, *, progress=lambda phase: None):
     chosen = []
     for index, name in enumerate(names):
         progress('topic_'+str(index+1)+'_search')
+        douyin_focus.ensure(page)
+        # Put the caret back at the end of the editor before the native button;
+        # it inserts at the editor's own selection.
+        field.focus(timeout=5000); field.evaluate(PLACE_CARET_END)
         if not field.evaluate(CARET_AT_END):
             raise PublishError('抖音话题插入光标不在末尾')
         unique(page.get_by_text('#添加话题', exact=True), '添加话题').click(timeout=5000)
@@ -414,6 +448,29 @@ def marker_path(request_path):
     return Path(request_path).with_suffix('.browser-attempt.json')
 
 
+PLAYER_READY = '''() => {
+  const ns=Array.from(document.querySelectorAll('video'));
+  return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
+    && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
+    && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
+}'''
+
+
+def wait_player_ready(page, seconds):
+    """Wait in short slices, re-asserting focus emulation between them."""
+    import time
+    deadline = time.monotonic() + seconds
+    while True:
+        left = deadline - time.monotonic()
+        try:
+            page.wait_for_function(PLAYER_READY, timeout=int(max(1, min(left, 15)) * 1000))
+            return
+        except Exception as exc:
+            if 'Timeout' not in type(exc).__name__ or time.monotonic() >= deadline:
+                raise
+            douyin_focus.ensure(page)
+
+
 def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     """One native upload plus fields; caller must persist its owned attempt first."""
     douyin_schedule.require_future(douyin_schedule.requested(pack['platform_metadata']))
@@ -427,13 +484,12 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     capture = douyin_upload.Capture(upload_receipt)
     page.on('response', capture.response)
     try:
+        # Hold focus emulation before the upload: an occluded background window otherwise
+        # defers the native player's media load and the ready wait times out after the
+        # upload receipt already arrived (2026-11-01 S4E03).
+        douyin_focus.ensure(page)
         empty_upload(page).set_input_files(checked_path(video), timeout=15000)
-        page.wait_for_function('''() => {
-          const ns=Array.from(document.querySelectorAll('video'));
-          return ns.length===1 && ns[0].currentSrc.startsWith('https://video-cn.douyin.com/')
-            && ns[0].readyState>=1 && Number.isFinite(ns[0].duration) && ns[0].duration>0
-            && Array.from(document.querySelectorAll('input[type=file]')).every(n=>!n.files||!n.files.length);
-        }''', timeout=180000)
+        wait_player_ready(page, 180)
         saved['video'] = video_identity(page)
         saved['source_video'] = douyin_video.observe(page, video)
     finally:
@@ -442,7 +498,13 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
         raise PublishError('抖音原生视频提交回执记录失败；保留尝试，不重传')
     if capture.events:
         saved['cloud_video'] = douyin_upload.receipt(capture.events, video_source, saved['source_video'])
+    fill_fields(page, pack, assets, cover_sources, identity, saved, marker)
+
+
+def fill_fields(page, pack, assets, cover_sources, identity, saved, marker):
+    """Fields after a verified upload; shared by first run and uploaded-unfilled resume."""
     saved['state'] = 'uploaded'; saved['phase'] = 'fields'; write_json(marker, saved)
+    douyin_focus.ensure(page)
     assert_identity(page, identity); no_warning(page)
     title, description = assert_empty_fields(page)
     # Do not overwrite an existing native declaration or collection.
@@ -458,9 +520,18 @@ def fill_new(page, pack, assets, cover_sources, identity, saved, marker):
     if pack['platform_metadata'].get('collection_name'):
         saved['phase'] = 'collection'; write_json(marker, saved)
         select_collection(page, pack['platform_metadata']['collection_name'])
+    fill_after_fields(page, pack, assets, cover_sources, saved, marker, progress)
+
+
+def fill_after_fields(page, pack, assets, cover_sources, saved, marker, progress, *, cover_saved=False):
+    """Cover, schedule and final readback; also the continue point when only the
+    cover readback stopped (cover_saved=True: re-read, never re-upload)."""
     def cover_receipt(role, value):
         saved.setdefault('covers', {})[role] = value; write_json(marker, saved)
-    douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
+    if cover_saved:
+        douyin_cover.readback_only(page, cover_sources, progress=progress, receipt=cover_receipt)
+    else:
+        douyin_cover.upload(page, assets, cover_sources, progress=progress, receipt=cover_receipt)
     if 'publish_at' in pack['platform_metadata']:
         saved['phase'] = 'schedule'; write_json(marker, saved)
         saved['schedule'] = douyin_schedule.fill(page, pack['platform_metadata'])

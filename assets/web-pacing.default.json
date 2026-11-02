@@ -1,0 +1,12 @@
+{
+  "_note": "保守的个人设定，不是平台规则；不保证规避风控。见 references/web-posting-pacing.md",
+  "switch_gap_seconds": [20, 90],
+  "platforms": {
+    "x":               {"dwell_seconds": [30, 180], "interval_median_minutes": 25, "interval_sigma": 0.5, "interval_floor_minutes": 12, "interval_cap_minutes": 90,  "daily_cap": 6},
+    "douyin":          {"dwell_seconds": [45, 180], "interval_median_minutes": 90, "interval_sigma": 0.45, "interval_floor_minutes": 45, "interval_cap_minutes": 240, "daily_cap": 3},
+    "wechat_channels": {"dwell_seconds": [45, 180], "interval_median_minutes": 90, "interval_sigma": 0.45, "interval_floor_minutes": 45, "interval_cap_minutes": 240, "daily_cap": 3},
+    "weibo":           {"dwell_seconds": [30, 150], "interval_median_minutes": 40, "interval_sigma": 0.5, "interval_floor_minutes": 20, "interval_cap_minutes": 150, "daily_cap": 6},
+    "bilibili":        {"dwell_seconds": [60, 180], "interval_median_minutes": 120, "interval_sigma": 0.45, "interval_floor_minutes": 60, "interval_cap_minutes": 300, "daily_cap": 3},
+    "xiaohongshu":     {"dwell_seconds": [60, 180], "interval_median_minutes": 120, "interval_sigma": 0.45, "interval_floor_minutes": 60, "interval_cap_minutes": 300, "daily_cap": 2, "paused": true}
+  }
+}

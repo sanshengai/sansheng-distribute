@@ -177,7 +177,11 @@ def background_window(anchor, *, cdp_url, retain=False):
         yield page
 
 
-def select_page(connection, platform, *, target_id=None, path=None):
+def select_page(connection, platform, *, target_id=None, path=None, anchor=False):
+    """anchor=True: the page is only an anchor for opening a task-owned window
+    (no input happens there). Several identical same-context home tabs (e.g. one
+    left by another executor) are then interchangeable; take the first instead
+    of failing. Editors and readbacks never use this."""
     matches = []
     for context in connection.contexts:
         for page in context.pages:
@@ -194,6 +198,9 @@ def select_page(connection, platform, *, target_id=None, path=None):
                 finally:
                     session.detach()
             matches.append(page)
+    if anchor and path is not None and not target_id and matches \
+            and len({id(m.context) for m in matches}) == 1:
+        return matches[0]
     if len(matches) != 1:
         raise PublishError('平台页面不是唯一；提供明确 target_id 或精确编辑路径，不猜选标签页')
     return matches[0]

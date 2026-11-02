@@ -1,6 +1,7 @@
 """Opt-in native single-video sender; immutable inputs and durable one attempt."""
 from __future__ import annotations
 import os
+import re
 import time
 from urllib.parse import parse_qs,urlsplit
 
@@ -84,9 +85,32 @@ def response_shape(body):
     return result
 
 
+def dwell_bounds():
+    """Optional author-paced pause after upload, before the single publish click.
+    SANSHENG_WEIBO_DWELL="30,180" -> random whole seconds in [30,180]."""
+    raw=os.environ.get('SANSHENG_WEIBO_DWELL','').strip()
+    if not raw:return None
+    try:low,high=(int(x) for x in raw.split(','))
+    except ValueError as exc:raise PublishError('SANSHENG_WEIBO_DWELL 须为 "下限,上限" 秒') from exc
+    if not 0<=low<=high<=600:raise PublishError('SANSHENG_WEIBO_DWELL 超出 0–600 秒')
+    return low,high
+
+
+def dwell(page,saved,marker):
+    bounds=dwell_bounds()
+    if bounds is None or saved.get('dwell_seconds') is not None:return
+    import random,douyin_focus
+    seconds=random.randint(*bounds);shared.checkpoint(saved,marker,dwell_seconds=seconds)
+    end=time.monotonic()+seconds
+    while (left:=end-time.monotonic())>0:
+        page.wait_for_timeout(int(min(left,15)*1000));douyin_focus.ensure(page)
+
+
 def submit_once(page,pack,assets,uid,saved,marker):
     if saved.get('submission_attempted_at') is not None or saved.get('accepted'):
         raise PublishError('微博视频已有发送尝试；只查询原作品，不再次点击')
+    dwell(page,saved,marker)
+    import douyin_focus;douyin_focus.ensure(page)
     snapshot=ready(page,pack,assets,uid,saved)
     button=page.get_by_role('button',name='发布',exact=True)
     if button.count()!=1 or not button.is_visible() or button.is_disabled():
@@ -205,6 +229,127 @@ def recover_uploaded_unsent(action,request,pack,bound,marker,profile):
             observed_account_identity=bound['identity'],tracking_scope='native_post_id')
 
 
+UNFILLED_STATES={'selected_once','video_verified'}
+EMPTY_EDITOR='''()=>[...document.querySelectorAll('input[type=text],textarea')].every(n=>!n.value)
+ &&[...document.querySelectorAll('input[type=file]')].every(n=>!n.files.length)
+ &&[...document.querySelectorAll('[contenteditable=true]')].every(n=>!n.textContent.trim())'''
+
+
+def recover_uploaded_unfilled(action,request,pack,bound,marker,profile):
+    """Original editor finished the cloud upload but stopped before any field/send.
+
+    verify proves no send was ever attempted and the editor is still empty;
+    only then may execute fill and send once in that same window. Never uploads.
+    """
+    if not marker.exists():return None
+    saved=read_json(marker)
+    if saved.get('state') not in UNFILLED_STATES|{'uploaded_unfilled_verified'}:return None
+    if not before_native_send(saved) or 'submission_attempted_at' in saved:return None
+    if (not saved.get('upload_events') or saved.get('upload_errors')!=[] or not saved.get('anchor_target_id')
+            or not saved.get('target_id') or saved.get('cover') or request['job'].get('remote_id')
+            or any(saved.get(k)!=v for k,v in bound.items())):
+        raise PublishError('微博已上传未填写原稿绑定或上传证据缺失；不续写')
+    prefill.video.cloud_receipt(saved['upload_events'],saved['source_size'])
+    assets=prefill.assets_for_resume(pack,request['request_path'])
+    item=next(a for a in assets if a['kind']=='video')
+    with home.connect(profile,writing=action=='execute') as connection:
+        anchor=home.select_page(connection,'weibo',path='/',target_id=saved['anchor_target_id'])
+        home.assert_identity(anchor,bound['identity'])
+        page=home.select_page(connection,'weibo',path='/upload/channel',target_id=saved['target_id'])
+        prefill.video.assert_identity(page,bound['identity']);home.assert_no_warning(page)
+        if not page.evaluate(EMPTY_EDITOR):
+            raise PublishError('微博原稿已有填写内容或待处理文件；不认定未填写')
+        native=prefill.video.observe_source(page,item,saved)
+        local=saved.get('local_video')
+        if not isinstance(local,dict) or any(native[k]!=local.get(k) for k in ('width','height','duration')):
+            raise PublishError('微博原生视频元数据与本地检查不符；不继续填写')
+        if saved.get('native_video') is not None and saved['native_video']!=native:
+            raise PublishError('微博原视频编辑会话身份改变；不认领其他稿件')
+        if action=='verify':
+            shared.checkpoint(saved,marker,state='uploaded_unfilled_verified',native_video=native,
+                              unfilled_original_state=saved.get('unfilled_original_state',saved['state']))
+            return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                state='not_submitted',absence_verified=True,absence_scope='original_video_uploaded_unfilled_no_send_attempt',
+                evidence_path=str(marker),observed_account_identity=bound['identity'])
+        if action!='execute' or saved['state']!='uploaded_unfilled_verified' or request['job']['state']!='prepared':
+            raise PublishError('微博已上传未填写原稿须先独立核对未发送状态')
+        def progress(phase,extra=None):
+            saved.update(extra or {});saved['state']=phase;write_json(marker,saved)
+        progress('video_verified',{'native_video':native})
+        fields.fill(page,pack,progress)
+        if pack['cover_asset_id']:
+            image=next(a for a in assets if a['id']==pack['cover_asset_id'])
+            prepared=prefill.cover.prepare(page,image);prefill.cover.check_video_ratio(prepared,local)
+            prefill.cover.upload(page,image,prepared,lambda phase,value:progress(phase,{'cover':value}))
+        prefill.verify(page,pack,assets,saved);progress('filled')
+        accepted=submit_once(page,pack,assets,bound['identity'],saved,marker)
+        if not saved.get('receipt_error') and saved.get('native_input_receipt'):
+            page.close();shared.checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
+        return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+            state='pending',remote_id=accepted['remote_id'],
+            remote_url=post.post.status_url(bound['identity'],accepted['remote_id']),
+            observed_account_identity=bound['identity'],tracking_scope='native_post_id')
+
+
+COVER_UNRECEIPTED_STATES={'cover_uploading','cover_unreceipted_verified'}
+
+
+def public_image(url):
+    """Anonymous GET of the public sinaimg cover; no cookies or account headers."""
+    from urllib.request import Request,urlopen
+    u=urlsplit(url)
+    if u.scheme!='https' or not re.fullmatch(r'(?:[A-Za-z0-9-]+\.)*sinaimg\.cn',u.netloc):
+        raise PublishError('微博封面地址不是公开图床')
+    with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0','Referer':'https://weibo.com/'}),timeout=20) as r:
+        return r.read(20*1024*1024+1)
+
+
+def recover_cover_unreceipted(action,request,pack,bound,marker,profile,fetch=public_image):
+    """Filled original editor whose cover reply was missed; never re-uploads.
+
+    verify re-proves no send trace, the same native video, sealed title/text/
+    type/declaration, and the visible cover PID decoding to the sealed 3:4 image;
+    only then may execute send once in the same window.
+    """
+    if not marker.exists():return None
+    saved=read_json(marker)
+    if saved.get('state') not in COVER_UNRECEIPTED_STATES:return None
+    if not before_native_send(saved) or 'submission_attempted_at' in saved:return None
+    if (not saved.get('native_video') or saved.get('upload_errors')!=[] or not isinstance(saved.get('cover'),dict)
+            or not saved.get('anchor_target_id') or not saved.get('target_id') or not pack['cover_asset_id']
+            or request['job'].get('remote_id') or any(saved.get(k)!=v for k,v in bound.items())):
+        raise PublishError('微博封面未收回执原稿绑定缺失；不续写')
+    assets=prefill.assets_for_resume(pack,request['request_path'])
+    image=next(a for a in assets if a['id']==pack['cover_asset_id'])
+    with home.connect(profile,writing=action=='execute') as connection:
+        anchor=home.select_page(connection,'weibo',path='/',target_id=saved['anchor_target_id'])
+        home.assert_identity(anchor,bound['identity'])
+        page=home.select_page(connection,'weibo',path='/upload/channel',target_id=saved['target_id'])
+        prefill.video.assert_identity(page,bound['identity']);home.assert_no_warning(page)
+        prepared=prefill.cover.prepare(page,image)
+        if saved['cover'].get('prepared')!=prepared:raise PublishError('微博封面封存源图已变')
+        cover=dict(saved['cover']);cover.pop('recovered_pid',None)
+        cover['recovered_pid']=prefill.cover.recover_unreceipted(page,image,prepared,cover,fetch)
+        saved['cover']=cover
+        prefill.verify(page,pack,assets,saved)
+        if action=='verify':
+            shared.checkpoint(saved,marker,state='cover_unreceipted_verified',cover=cover,
+                              cover_unreceipted_original_state=saved.get('cover_unreceipted_original_state',saved['state']))
+            return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                state='not_submitted',absence_verified=True,absence_scope='original_video_filled_cover_unreceipted_no_send_attempt',
+                evidence_path=str(marker),observed_account_identity=bound['identity'])
+        if action!='execute' or saved['state']!='cover_unreceipted_verified' or request['job']['state']!='prepared':
+            raise PublishError('微博封面未收回执原稿须先独立核对未发送状态')
+        shared.checkpoint(saved,marker,state='filled',cover=cover)
+        accepted=submit_once(page,pack,assets,bound['identity'],saved,marker)
+        if not saved.get('receipt_error') and saved.get('native_input_receipt'):
+            page.close();shared.checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
+        return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+            state='pending',remote_id=accepted['remote_id'],
+            remote_url=post.post.status_url(bound['identity'],accepted['remote_id']),
+            observed_account_identity=bound['identity'],tracking_scope='native_post_id')
+
+
 def dispatch(request_path,action,profile,lock_fd):
     if action not in {'execute','verify'}:raise PublishError('不支持的微博视频发送阶段')
     try:os.fstat(lock_fd)
@@ -225,6 +370,10 @@ def dispatch(request_path,action,profile,lock_fd):
     if recovered is not None: return recovered
     # The request file location is runtime context, never part of the sealed pack.
     recovered = recover_uploaded_unsent(action,dict(request,request_path=str(request_path)),pack,bound,marker,profile)
+    if recovered is not None:return recovered
+    recovered = recover_uploaded_unfilled(action,dict(request,request_path=str(request_path)),pack,bound,marker,profile)
+    if recovered is not None:return recovered
+    recovered = recover_cover_unreceipted(action,dict(request,request_path=str(request_path)),pack,bound,marker,profile)
     if recovered is not None:return recovered
     if action=='execute' and marker.exists():raise PublishError('微博视频任务已有尝试；只查询，不重填或重传')
     if action=='verify':

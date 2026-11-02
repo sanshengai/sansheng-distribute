@@ -25,8 +25,17 @@ def fill(page, pack, assets, identity, saved, marker):
         # Native video selection may reset text; do it before filling the copy.
         engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
         saved['state']='before_native_selection';write_json(marker,saved)
-        file.set_input_files(checked_path(assets[0]),timeout=15000)
-        page.wait_for_function(x_video.READY,timeout=120000,polling=250)
+        from x_compose_ready import wait_painted,emulate_focus,assert_visible,Diagnostics
+        try:emulate_focus(page)
+        except Exception:pass
+        assert_visible(page)
+        with Diagnostics(page) as diag:
+            try:
+                file.set_input_files(checked_path(assets[0]),timeout=15000)
+                wait_painted(page,x_video.READY,timeout_ms=120000)
+            except Exception:
+                saved['upload_diagnostics']=diag.snapshot();write_json(marker,saved)
+                raise
         engine.assert_identity(page,identity);engine.assert_no_warning(page)
         native,cloud=x_video.verify(page,pack,saved)
         saved.update(native_video=native,cloud_video=cloud,state='cloud_processed');write_json(marker,saved)
@@ -61,16 +70,17 @@ def dispatch(request_path,action,profile,lock_fd):
             raise PublishError('原视频编辑会话绑定改变或缺失；不认领其他草稿')
     with engine.connect(profile,writing=action=='execute') as connection:
         if action=='execute':
-            assets=stage(pack,request_path);size=x_video.prepare(assets[0])
-            anchor=engine.select_page(connection,'x',path='/home')
-            with background_window(anchor,cdp_url=endpoint,retain=True) as page:
+            from x_compose_ready import decodable,KeepAwake
+            assets=stage(pack,request_path);size=x_video.prepare(assets[0]);__import__('browser_assets').checked_path(assets[0]) and decodable(__import__('browser_assets').checked_path(assets[0]))
+            anchor=engine.select_page(connection,'x',path='/home',anchor=True)
+            with KeepAwake(),background_window(anchor,cdp_url=endpoint,retain=True) as page:
                 saved=dict(bound,target_id=engine.target_id(page),state='owned_window_opened',
                            tracking_scope='chrome_session_only',source_size=size,upload_events=[],upload_errors=[])
                 fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
                 with os.fdopen(fd,'w') as out:
                     json.dump(saved,out);out.flush();os.fsync(out.fileno())
-                page.goto('https://x.com/compose/post',wait_until='domcontentloaded',timeout=25000)
-                page.locator(x_video.MODAL+' [data-testid="tweetTextarea_0"]').wait_for(state='visible',timeout=20000)
+                from x_compose_ready import open_composer
+                open_composer(page,saved,marker,identity)
                 fill(page,pack,assets,identity,saved,marker)
         else:
             page=engine.select_page(connection,'x',path='/compose/post',target_id=saved['target_id'])

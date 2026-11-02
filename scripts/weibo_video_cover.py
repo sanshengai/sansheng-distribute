@@ -29,6 +29,46 @@ CROP=r'''async()=>{
 }'''
 
 
+COVER_RESPONSE_WAIT_MS=60000
+COVER_VISUAL_MAX_MAE=8.0
+VISUAL=r'''async([a,b])=>{const load=s=>new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=s});
+ const [x,y]=await Promise.all([load(a),load(b)]);const W=54,H=72,px=i=>{const c=document.createElement('canvas');c.width=W;c.height=H;
+ const g=c.getContext('2d');g.drawImage(i,0,0,W,H);return g.getImageData(0,0,W,H).data};const p=px(x),q=px(y);let d=0,n=0;
+ for(let k=0;k<p.length;k+=4){for(let j=0;j<3;j++){d+=Math.abs(p[k+j]-q[k+j]);n++}}
+ return {a:[x.naturalWidth,x.naturalHeight],b:[y.naturalWidth,y.naturalHeight],mae:d/n}}'''
+
+
+def recover_unreceipted(page,asset,prepared,saved,fetch):
+    """Cover request was recorded but its native reply was missed. Read-only:
+    the visible preview PID must decode to the prepared size and visually match
+    the sealed local image. fetch(url)->bytes reads the public CDN image only."""
+    if (not isinstance(saved,dict) or saved.get('prepared')!=prepared or saved.get('errors')!=[]
+            or saved.get('responses')!=[] or len(saved.get('requests') or [])!=1):
+        raise PublishError('微博封面不是“已上传未收回执”状态；不认领')
+    verify_crop(saved.get('crop',{}),prepared)
+    r=saved['requests'][0]
+    if r.get('sha256')!=saved['crop']['native_sha256'] or r.get('size')!=saved['crop']['native_size']:
+        raise PublishError('微博封面上传请求与原生裁剪输出不符')
+    from weibo_video_post import image_pid
+    link=page.get_by_role('link',name='上传封面',exact=True)
+    if link.count()!=1:raise PublishError('微博封面字段不能唯一核对')
+    node=link.locator('..').locator('..').locator('.woo-picture-main > img')
+    if node.count()!=1:raise PublishError('微博封面预览不能唯一核对')
+    src=node.evaluate('(n)=>n.currentSrc');pid=image_pid(src)
+    u=urlsplit(src);full=u._replace(path=re.sub(r'^/[^/]+/','/large/',u.path)).geturl()
+    remote=fetch(full)
+    if not isinstance(remote,bytes) or not 0<len(remote)<=20*1024*1024:raise PublishError('微博封面原图无法读取')
+    path=Path(checked_path(asset));mime='image/png' if path.suffix.lower()=='.png' else 'image/jpeg'
+    local='data:'+mime+';base64,'+base64.b64encode(path.read_bytes()).decode('ascii')
+    far='data:image/jpeg;base64,'+base64.b64encode(remote).decode('ascii')
+    v=page.evaluate(VISUAL,[local,far])
+    if (v.get('a')!=[prepared['width'],prepared['height']] or v.get('b')!=[prepared['width'],prepared['height']]
+            or type(v.get('mae')) not in (int,float) or not 0<=v['mae']<=COVER_VISUAL_MAX_MAE):
+        raise PublishError('微博页面封面与本地封存原图尺寸或画面不符；不认领')
+    return dict(pid=pid,width=prepared['width'],height=prepared['height'],visual_mae=float(v['mae']),
+                remote_sha256=hashlib.sha256(remote).hexdigest(),source_sha256=asset['sha256'])
+
+
 def prepare(page,asset):
     path=Path(checked_path(asset));size=path.stat().st_size
     if not 0<size<=10*1024*1024:raise PublishError('当前微博封面路线仅支持不超过10MiB的源图')
@@ -107,6 +147,18 @@ def receipt(asset,prepared,saved):
         raise PublishError('微博封面来源或上传记录缺失')
     verify_crop(saved.get('crop',{}),prepared)
     requests,responses=saved.get('requests',[]),saved.get('responses',[])
+    recovered=saved.get('recovered_pid')
+    if responses==[] and isinstance(recovered,dict):
+        if (len(requests)!=1 or requests[0].get('size')!=saved['crop']['native_size']
+                or requests[0].get('sha256')!=saved['crop']['native_sha256']
+                or requests[0].get('content_type')!='application/octet-stream'
+                or recovered.get('width')!=prepared['width'] or recovered.get('height')!=prepared['height']
+                or type(recovered.get('visual_mae')) is not float or not 0<=recovered['visual_mae']<=COVER_VISUAL_MAX_MAE
+                or recovered.get('source_sha256')!=asset['sha256']
+                or not re.fullmatch('[A-Za-z0-9]{8,128}',recovered.get('pid',''))):
+            raise PublishError('微博封面恢复证据不完整；不认领')
+        return dict(pid=recovered['pid'],source_asset_id=asset['id'],source_sha256=asset['sha256'],
+                    native_sha256=saved['crop']['native_sha256'],width=prepared['width'],height=prepared['height'])
     if (len(requests)!=1 or len(responses)!=1 or requests[0].get('size')!=saved['crop']['native_size']
             or requests[0].get('sha256')!=saved['crop']['native_sha256']
             or requests[0].get('content_type')!='application/octet-stream'
@@ -163,6 +215,11 @@ def upload(page,asset,prepared,checkpoint):
     try:
         button=page.locator('button:visible').filter(has_text=re.compile(r'^\s*完成\s*$'))
         button.scroll_into_view_if_needed(timeout=5000);persist('before_cover_complete');click_background(page,button)
+        # READY is the video's completion label and is already true here; it is
+        # not a cover signal. Keep listening until the one native reply arrives.
+        waited=0
+        while not saved['responses'] and not saved['errors'] and waited<COVER_RESPONSE_WAIT_MS:
+            page.wait_for_timeout(250);waited+=250
         page.wait_for_function(READY,timeout=90000,polling=250)
         observe(page,asset,prepared,saved);persist('cover_verified')
     finally:

@@ -38,6 +38,15 @@ def public_text(pack):
     return dict(title=title,caption=caption,description=title+' '+caption)
 
 
+def public_desc_forms(caption_desc):
+    """The aggregate public desc. With a multi-line caption Douyin stores the blank line
+    before the topic block as " \n" (2026-11-01, S3; caption field itself is exact).
+    Accept only that single native form besides the exact text."""
+    forms={caption_desc}
+    if '\n\n#' in caption_desc:forms.add(caption_desc.replace('\n\n#',' \n#',1))
+    return forms
+
+
 def selected_options(rows):
     groups=[{'公开':('0',True),'好友可见':('2',False),'仅自己可见':('1',False)},
             {'立即发布':('0',True),'定时发布':('1',False)},
@@ -53,6 +62,26 @@ def selected_options(rows):
                     or any(type(found[0]['inputs'][0][k]) is not bool for k in ('checked','disabled'))):
                 raise PublishError('抖音须原生明确为公开、立即发布且不跨发；不改变作者设置')
     return dict(visibility='public',schedule='immediate',cross_post=False)
+
+
+def fresh_anchor(connection):
+    """Own a background creator-home tab as CDP anchor; never depend on a shared tab."""
+    contexts=[c for c in connection.contexts if c.pages]
+    if len(contexts)!=1:raise PublishError('不能唯一确定专用浏览器上下文')
+    ctx=contexts[0];session=connection.new_browser_cdp_session()
+    try:
+        with ctx.expect_page(timeout=15000) as event:
+            session.send('Target.createTarget',{'url':post.HOME,'background':True})
+    finally:
+        session.detach()
+    page=event.value;page.wait_for_load_state('domcontentloaded',timeout=25000)
+    return page
+
+
+def anchor_for(connection,target_id=None):
+    """Recorded anchor if still present; otherwise a fresh owned background anchor."""
+    try:return home.select_page(connection,'douyin',**(dict(target_id=target_id) if target_id else {})),False
+    except PublishError:return fresh_anchor(connection),True
 
 
 def native_account(anchor, identity, endpoint):
@@ -129,13 +158,39 @@ def ready(page,pack,identity,uid,endpoint,saved):
     return selected_options(page.locator('label').evaluate_all(CHOICES_READ))
 
 
+def dwell_bounds():
+    """Optional author-paced pause after upload and before the single publish click.
+    SANSHENG_DOUYIN_DWELL="30,180" -> a random whole number of seconds in [30,180]."""
+    raw=os.environ.get('SANSHENG_DOUYIN_DWELL','').strip()
+    if not raw:return None
+    try:low,high=(int(x) for x in raw.split(','))
+    except ValueError as exc:raise PublishError('SANSHENG_DOUYIN_DWELL 须为 "下限,上限" 秒') from exc
+    if not 0<=low<=high<=600:raise PublishError('SANSHENG_DOUYIN_DWELL 超出 0–600 秒')
+    return low,high
+
+
+def dwell(page,saved,marker):
+    bounds=dwell_bounds()
+    if bounds is None or saved.get('dwell_seconds') is not None:return
+    import random,douyin_focus
+    seconds=random.randint(*bounds);checkpoint(saved,marker,dwell_seconds=seconds)
+    end=time.monotonic()+seconds
+    while (left:=end-time.monotonic())>0:
+        page.wait_for_timeout(int(min(left,15)*1000));douyin_focus.ensure(page)
+
+
 def submit_once(page,pack,identity,uid,endpoint,saved,marker):
     if saved.get('submission_attempted_at') is not None or saved.get('accepted'):
         raise PublishError('抖音已有发送尝试；只查询原作品，不再次点击')
+    dwell(page,saved,marker)
     options=ready(page,pack,identity,uid,endpoint,saved)
+    import douyin_focus; douyin_focus.ensure(page)
     button=page.get_by_role('button',name='发布',exact=True)
     if button.count()!=1 or not button.is_visible() or button.is_disabled():
         raise PublishError('抖音发布按钮不唯一、不可见或禁用')
+    # The button sits below the fold in a normal-height window (2026-11-01: y≈1452 in an
+    # 828px viewport); scroll it into view before the stability check, never force-click.
+    button.scroll_into_view_if_needed(timeout=5000); page.wait_for_timeout(300)
     checkpoint(saved,marker,submission_attempted_at=time.time(),state='submission_unknown',publication_options=options)
     capture=Capture(uid,lambda value:checkpoint(saved,marker,accepted=value,state='accepted'))
     page.on('response',capture.response)
@@ -166,10 +221,11 @@ def match_readback(observed,pack,saved,identity,uid):
     if (observed.get('remote_id')!=accepted['remote_id'] or observed.get('native_user_id')!=uid
             or observed.get('observed_account_identity')!=identity
             or details.get('remote_id')!=accepted['remote_id'] or details.get('native_user_id')!=uid
-            or any(details.get(k)!=v for k,v in text.items())
+            or any(details.get(k)!=v for k,v in text.items() if k!='description')
+            or details.get('description') not in public_desc_forms(text['description'])
             or details.get('topics')!=home.topic_names(pack)
             or details.get('declaration')!=home.declaration(pack['platform_metadata'])
-            or observed.get('description')!=text['description']
+            or observed.get('description') not in public_desc_forms(text['description'])
             or type(observed.get('native_review_status')) is not int or observed['native_review_status']!=2
             or type(observed.get('native_visibility_status')) is not int or observed['native_visibility_status']!=1
             or (actual_collection is not None if wanted_collection is None else
@@ -194,9 +250,21 @@ def dispatch(request_path,action,profile,lock_fd):
     marker=home.marker_path(request_path)
     bound=dict(pack_digest=digest(pack),identity=identity,cdp_url=endpoint,browser_profile=browser)
     from browser_preinput import recover
+    if marker.exists():
+        import douyin_uploaded_resume as uploaded
+        current=read_json(marker)
+        if uploaded.applies(current) and not uploaded.release_chosen(marker,current):
+            return uploaded.run(action,request,request_path,pack,bound,marker,profile,current)
     recovered = recover(action, request, pack, bound, marker, profile)
     if recovered is not None: return recovered
     if action=='execute' and marker.exists():raise PublishError('抖音已有尝试；只查询，不重新上传或填报')
+    if (action=='verify' and not marker.exists() and not request['job'].get('remote_id')
+            and not any(marker.parent.glob(marker.name+'.*'))):
+        # The attempt record is written (O_EXCL + fsync) before any navigation or
+        # upload; with no record and no archive, this executor never touched the platform.
+        return dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                    state='not_submitted',absence_verified=True,absence_scope='douyin_no_attempt_record',
+                    observed_account_identity=identity)
     if action=='verify':
         saved=read_json(marker);accepted=saved.get('accepted',{})
         if not isinstance(accepted,dict):raise PublishError('抖音受理回执格式不完整；不重新发送')
@@ -212,45 +280,52 @@ def dispatch(request_path,action,profile,lock_fd):
             raise PublishError('抖音原发送身份或受理回执不完整；保持未知，不重新发送')
     from browser_engine import target_id
     with home.connect(profile,writing=True) as connection:
-        anchor=home.select_page(connection,'douyin',**(dict(target_id=saved['anchor_target_id']) if action=='verify' else {}))
-        uid=native_account(anchor,identity,endpoint)
-        if action=='execute':
-            video.prepare(next(a for a in pack['assets'] if a['kind']=='video'))
-            assets=stage(pack,request_path)
-            with background_window(anchor,cdp_url=endpoint,retain=True) as page:
-                saved=dict(bound,target_id=target_id(page),anchor_target_id=target_id(anchor),native_user_id=uid,
-                           state='owned_window_opened',phase='upload',video=None,video_upload_events=[],video_upload_errors=[])
-                try:
-                    fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                    with os.fdopen(fd,'w') as stream:
-                        json.dump(saved,stream);stream.flush();os.fsync(stream.fileno())
-                except Exception:
-                    page.close()  # No upload has begun; close only this new owned window.
-                    raise
-                page.goto('https://creator.douyin.com'+home.UPLOAD,wait_until='domcontentloaded',timeout=25000)
-                home.empty_upload(page)
-                cover_sources=cover.prepare(page,assets,cover.requested(pack))
-                source=next(a for a in assets if a['kind']=='video')
-                video.prepare(source);checkpoint(saved,marker,video_source=upload.source(source),state='attempted')
-                home.fill_new(page,pack,assets,cover_sources,identity,saved,marker)
-                accepted=submit_once(page,pack,identity,uid,endpoint,saved,marker)
-                if not saved.get('receipt_error'):
-                    try:page.close()
-                    except Exception as exc:checkpoint(saved,marker,owned_composer_cleanup_error=type(exc).__name__)
-                    else:checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
-        else:
-            if uid!=saved['native_user_id']:raise PublishError('抖音原任务账号原生身份已改变')
-        accepted=saved['accepted'];rid=accepted['remote_id']
-        result=dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
-                    state='pending',remote_id=rid,remote_url='https://www.douyin.com/video/'+rid,
-                    observed_account_identity=identity,tracking_scope='native_post_id',content_verified=False)
-        if action=='execute':return result
-        try:observed=post.readback(anchor,cdp_url=endpoint,public_identity=identity,remote_id=rid,include_details=True)
-        except PublishError:
-            result.update(stage='independent_readback_unavailable',verification_pending=True)
-            return result  # An accepted ID is retained even while review/list queries fail.
-        proof=match_readback(observed,pack,saved,identity,uid)
-        write_json(marker.with_suffix('.douyin-readback.json'),dict(observation=observed,source_bindings=proof))
-        result.update(state='published',content_verified=True,source_media_verified=True,
-                      verified_pack_digest=digest(pack),verified_asset_ids=[a['id'] for a in pack['assets']])
-        return result
+        anchor,own_anchor=anchor_for(connection,saved['anchor_target_id'] if action=='verify' else None)
+        try:
+            uid=native_account(anchor,identity,endpoint)
+            if action=='execute':
+                video.prepare(next(a for a in pack['assets'] if a['kind']=='video'))
+                assets=stage(pack,request_path)
+                with background_window(anchor,cdp_url=endpoint,retain=True) as page:
+                    saved=dict(bound,target_id=target_id(page),anchor_target_id=target_id(anchor),native_user_id=uid,
+                               state='owned_window_opened',phase='upload',video=None,video_upload_events=[],video_upload_errors=[])
+                    try:
+                        fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                        with os.fdopen(fd,'w') as stream:
+                            json.dump(saved,stream);stream.flush();os.fsync(stream.fileno())
+                    except Exception:
+                        page.close()  # No upload has begun; close only this new owned window.
+                        raise
+                    page.goto('https://creator.douyin.com'+home.UPLOAD,wait_until='domcontentloaded',timeout=25000)
+                    # Same bounded wait as the prefill route: domcontentloaded precedes the native uploader.
+                    page.locator('input[type="file"]').wait_for(state='attached',timeout=15000)
+                    home.empty_upload(page)
+                    cover_sources=cover.prepare(page,assets,cover.requested(pack))
+                    source=next(a for a in assets if a['kind']=='video')
+                    video.prepare(source);checkpoint(saved,marker,video_source=upload.source(source),state='attempted')
+                    home.fill_new(page,pack,assets,cover_sources,identity,saved,marker)
+                    accepted=submit_once(page,pack,identity,uid,endpoint,saved,marker)
+                    if not saved.get('receipt_error'):
+                        try:page.close()
+                        except Exception as exc:checkpoint(saved,marker,owned_composer_cleanup_error=type(exc).__name__)
+                        else:checkpoint(saved,marker,owned_composer_closed_after_acceptance=True)
+            else:
+                if uid!=saved['native_user_id']:raise PublishError('抖音原任务账号原生身份已改变')
+            accepted=saved['accepted'];rid=accepted['remote_id']
+            result=dict({k:pack[k] for k in ('manifest_digest','target_id','platform','account')},
+                        state='pending',remote_id=rid,remote_url='https://www.douyin.com/video/'+rid,
+                        observed_account_identity=identity,tracking_scope='native_post_id',content_verified=False)
+            if action=='execute':return result
+            try:observed=post.readback(anchor,cdp_url=endpoint,public_identity=identity,remote_id=rid,include_details=True)
+            except PublishError:
+                result.update(stage='independent_readback_unavailable',verification_pending=True)
+                return result  # An accepted ID is retained even while review/list queries fail.
+            proof=match_readback(observed,pack,saved,identity,uid)
+            write_json(marker.with_suffix('.douyin-readback.json'),dict(observation=observed,source_bindings=proof))
+            result.update(state='published',content_verified=True,source_media_verified=True,
+                          verified_pack_digest=digest(pack),verified_asset_ids=[a['id'] for a in pack['assets']])
+            return result
+        finally:
+            if own_anchor:
+                try:anchor.close()
+                except Exception:pass
