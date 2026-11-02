@@ -206,28 +206,60 @@ def select_page(connection, platform, *, target_id=None, path=None, anchor=False
     return matches[0]
 
 
-def x_home_anchor(connection, *, wait_s=20, sleep=time.sleep):
-    """The unique x.com/home anchor; reopen it in the background when it is missing.
+def home_anchor(connection, platform, *, url, path, wait_s=20, sleep=time.sleep):
+    """The platform's home anchor tab; reopen it in the background when it is missing.
 
-    2026-11-02: the dedicated Chrome is shared with other executors and the anchor
-    tab was closed externally several times (once between an accepted post and its
-    readback). A missing anchor is not a platform state: open exactly one
-    background, unfocused x.com/home target and select it. Duplicates or a missing
-    tab after reopening still fail; no existing tab is navigated or activated."""
+    2026-11-02/03: the dedicated Chrome is shared with other executors and home
+    anchor tabs (x.com/home, weibo.com/) were closed externally, so a run failed
+    before touching the platform. A missing anchor is not a platform state: open
+    exactly one background, unfocused target at ``url`` and select it. A missing
+    tab after reopening still fails; no existing tab is navigated or activated."""
+    origins = ORIGINS.get(platform, set())
     def matches():
         return [p for c in connection.contexts for p in c.pages
-                if urlsplit(p.url).netloc == 'x.com' and urlsplit(p.url).path == '/home']
+                if f'{urlsplit(p.url).scheme}://{urlsplit(p.url).netloc}' in origins
+                and urlsplit(p.url).path == path]
+    parts = urlsplit(url)
+    if f'{parts.scheme}://{parts.netloc}' not in origins or parts.path != path:
+        raise PublishError('入口页地址与平台或路径不符；不打开')
     if not matches():
         session = connection.new_browser_cdp_session()
         try:
-            session.send('Target.createTarget', {'url': 'https://x.com/home', 'background': True, 'focus': False})
+            session.send('Target.createTarget', {'url': url, 'background': True, 'focus': False})
         finally:
             try: session.detach()
             except Exception: pass
         waited = 0.0
         while not matches() and waited < wait_s:
-            sleep(0.5); waited += 0.5
-    return select_page(connection, 'x', path='/home', anchor=True)
+            _pump(connection, sleep, 0.5); waited += 0.5
+    return select_page(connection, platform, path=path, anchor=True)
+
+
+def _pump(connection, sleep, seconds):
+    """Wait while letting a sync Playwright connection dispatch target events.
+
+    A plain time.sleep never processes Playwright's event queue, so a newly
+    created target would not show up in context.pages (2026-11-03 weibo anchor).
+    Waiting through an existing page's wait_for_timeout pumps the events."""
+    if sleep is time.sleep:
+        for context in getattr(connection, 'contexts', []):
+            for page in getattr(context, 'pages', []):
+                if hasattr(page, 'wait_for_timeout'):
+                    try:
+                        page.wait_for_timeout(int(seconds * 1000)); return
+                    except Exception:
+                        pass
+    sleep(seconds)
+
+
+def x_home_anchor(connection, *, wait_s=20, sleep=time.sleep):
+    """The x.com/home anchor (see home_anchor)."""
+    return home_anchor(connection, 'x', url='https://x.com/home', path='/home', wait_s=wait_s, sleep=sleep)
+
+
+def weibo_home_anchor(connection, *, wait_s=20, sleep=time.sleep):
+    """The weibo.com/ anchor used to open task-owned editor windows (see home_anchor)."""
+    return home_anchor(connection, 'weibo', url='https://weibo.com/', path='/', wait_s=wait_s, sleep=sleep)
 
 
 def render_background_page(page):

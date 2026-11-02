@@ -170,3 +170,11 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 2. 已发出：`python3 scripts/publish.py --profile <profile> recover-wechat_channels KEY --remote-id export/<作品ID>`。verify 接力重新读取列表：账号、作品 ID、描述全文、短标题、合集 ID、原创、原生媒体 MD5 与封存原片一致，再取原生分享链接与 3:4 封面比对，回 `published` + `recovery_verified=true` + `source_md5_match=true`。普通 `resume-job` 不能绑定新 ID（会被拒绝）。
 3. 未发出：列表无匹配且标记 `submit_clicked=false` 时按作者确认路径（`confirm_unsubmitted.py`）处理；空列表或未加载完不算证据。
 4. 账本外补完（作者授权在原标签补完并点发表）也走第 2 步，只读认领，不重发。
+
+## X / 微博入口页丢失
+
+同一专用 Chrome 上其他执行器可能关掉 x.com/home 或 weibo.com 首页标签。发布与读回前先 `select_page`；失败时 `browser_runtime.home_anchor` 以 `background=true, focus=false` 新开入口页（不前台），URL 不符拒绝。仍失败才停平台并记录。
+
+## YouTube 上传后读回 pending
+
+上传后 videos.list 空 items 或处理中元数据未落定，适配器返回 pending 而不是失败；稍后 `resume` 再读回。处理完成后字段仍不符才是真错误；频道不符直接报错。不要因 pending 重发。

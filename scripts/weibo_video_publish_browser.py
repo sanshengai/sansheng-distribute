@@ -401,8 +401,13 @@ def dispatch(request_path,action,profile,lock_fd):
             raise PublishError('微博视频原生发送载荷或持久回执不完整；不重发或冒称成功')
     from browser_engine import target_id
     with home.connect(profile,writing=action=='execute') as connection:
-        anchor=home.select_page(connection,'weibo',path='/',
-            **(dict(target_id=saved['anchor_target_id']) if action=='verify' else {}))
+        if action=='verify':
+            anchor=home.select_page(connection,'weibo',path='/',target_id=saved['anchor_target_id'])
+        else:
+            try:anchor=home.select_page(connection,'weibo',path='/')
+            except PublishError:
+                from browser_runtime import weibo_home_anchor
+                anchor=weibo_home_anchor(connection)  # externally closed anchor: reopen in background
         home.assert_identity(anchor,uid)
         if action=='execute':
             assets=stage(pack,request_path)

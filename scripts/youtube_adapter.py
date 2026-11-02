@@ -587,8 +587,19 @@ def dispatch(request_path, action, profile, client_factory=APIClient):
     code, _, raw = client.call('GET', API+'/youtube/v3/videos?'+q)
     if code != 200: raise PublishError('YouTube 作品读回失败')
     items = json_body(raw).get('items')
+    # 2026-11-03 S5E01 (and S4E06/E08): the verify right after the upload failed while a
+    # later read-only resume published. Immediately after upload, videos.list can still
+    # return no item or not-yet-applied metadata. Before processing completes that is
+    # "pending" (never success); after processing a mismatch remains a hard failure.
+    if isinstance(items, list) and not items: return observation
     if not isinstance(items, list) or len(items) != 1: raise PublishError('YouTube 作品读回不唯一')
     item = items[0]; sn = item.get('snippet',{}); st = item.get('status',{})
+    if item.get('id') == video_id and sn.get('channelId') == channel and st.get('uploadStatus') != 'processed':
+        settled = (sn.get('title') == resource['snippet']['title']
+                   and sn.get('description','') == resource['snippet']['description']
+                   and tags_equal(sn.get('tags',[]), resource['snippet'].get('tags',[]))
+                   and st.get('privacyStatus') == 'public')
+        if not settled: return observation
     if (item.get('id') != video_id or sn.get('channelId') != channel
             or sn.get('title') != resource['snippet']['title']
             or sn.get('description','') != resource['snippet']['description']
@@ -630,9 +641,21 @@ def main():
         fd=int(os.environ['SANDY_PUBLISH_LOCK_FD']); os.fstat(fd)
         print(json.dumps(dispatch(args.request,args.action,load_profile(args.profile)),ensure_ascii=False))
         return 0
-    except Exception:
+    except Exception as exc:
         # A raw exception may contain an OAuth token or session URI; never expose it.
-        print(json.dumps({'ok':False,'error':'YouTube 适配器未完成；保持原任务并先核验'},ensure_ascii=False),file=sys.stderr)
+        # Only this module's own fixed PublishError texts are safe to surface as a reason.
+        body={'ok':False,'error':'YouTube 适配器未完成；保持原任务并先核验'}
+        reason=safe_reason(exc)
+        if reason: body['reason']=reason
+        print(json.dumps(body,ensure_ascii=False),file=sys.stderr)
         return 2
+
+
+def safe_reason(exc):
+    """Fixed adapter-authored PublishError text only (no URLs, tokens or formatted values)."""
+    if type(exc) is not PublishError: return type(exc).__name__
+    text=str(exc)
+    if len(text)>80 or any(m in text.lower() for m in ('://','token','upload_id','bearer','key=')): return 'PublishError'
+    return text
 
 if __name__=='__main__': sys.exit(main())

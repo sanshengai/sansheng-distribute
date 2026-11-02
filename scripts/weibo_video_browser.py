@@ -14,6 +14,14 @@ import weibo_video_fields as fields
 import weibo_video_cover as cover
 import video_probe
 
+def _anchor(connection):
+    """Unique weibo.com/ anchor; when missing (closed by another executor), reopen one in background."""
+    try:return select_page(connection,'weibo',path='/')
+    except PublishError:
+        from browser_runtime import weibo_home_anchor
+        return weibo_home_anchor(connection)
+
+
 
 def assets_for_resume(pack,request_path):
     root=Path(request_path).with_suffix('.browser-assets')
@@ -112,7 +120,7 @@ def dispatch(request_path,action,profile,lock_fd):
     with connect(profile,writing=action=='execute') as connection:
         if action=='execute':
             assets=stage(pack,request_path);item=next(a for a in assets if a['kind']=='video')
-            anchor=select_page(connection,'weibo',path='/');home.assert_identity(anchor,identity)
+            anchor=_anchor(connection);home.assert_identity(anchor,identity)
             with filled_editor(anchor,pack,assets,bound,marker,endpoint) as (page,saved):
                 pass
         else:

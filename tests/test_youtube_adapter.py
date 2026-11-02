@@ -298,3 +298,38 @@ class YoutubeAdapterTest(unittest.TestCase):
         with self.assertRaises(PublishError): self.run_adapter('verify')
 
 if __name__=='__main__': unittest.main()
+
+
+class YoutubeEarlyReadbackTest(YoutubeAdapterTest):
+    """2026-11-03 S5E01: verify right after upload saw a not-yet-settled video -> pending, not failure."""
+    def test_empty_items_right_after_upload_is_pending(self):
+        self.run_adapter('execute'); orig=self.fake.call
+        def empty(method,url,**kw):
+            if '/videos?' in url and method=='GET': return 200,{},json.dumps({'items':[]}).encode()
+            return orig(method,url,**kw)
+        self.fake.call=empty; self.assertEqual(self.run_adapter('verify')['state'],'pending')
+        self.fake.call=orig; self.assertEqual(self.run_adapter('verify')['state'],'published')
+    def test_unprocessed_unsettled_metadata_is_pending_but_processed_mismatch_fails(self):
+        self.run_adapter('execute'); orig=self.fake.call; state={'up':'uploaded'}
+        def early(method,url,**kw):
+            code,h,b=orig(method,url,**kw)
+            if '/videos?' in url and method=='GET':
+                d=json.loads(b); it=d['items'][0]; it['snippet'].pop('tags',None); it['status']['uploadStatus']=state['up']; b=json.dumps(d).encode()
+            return code,h,b
+        self.fake.call=early; self.assertEqual(self.run_adapter('verify')['state'],'pending')
+        state['up']='processed'
+        with self.assertRaises(PublishError): self.run_adapter('verify')
+    def test_wrong_channel_still_fails_even_unprocessed(self):
+        self.run_adapter('execute'); orig=self.fake.call
+        def other(method,url,**kw):
+            code,h,b=orig(method,url,**kw)
+            if '/videos?' in url and method=='GET':
+                d=json.loads(b); it=d['items'][0]; it['snippet']['channelId']='UC'+'b'*22; it['status']['uploadStatus']='uploaded'; b=json.dumps(d).encode()
+            return code,h,b
+        self.fake.call=other
+        with self.assertRaises(PublishError): self.run_adapter('verify')
+    def test_safe_reason_hides_urls_and_tokens(self):
+        from youtube_adapter import safe_reason
+        self.assertEqual(safe_reason(PublishError('YouTube 作品读回不唯一')),'YouTube 作品读回不唯一')
+        self.assertEqual(safe_reason(PublishError('bad https://x/upload_id=1')),'PublishError')
+        self.assertEqual(safe_reason(ValueError('token abc')),'ValueError')

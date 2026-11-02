@@ -2,6 +2,9 @@
 
 ## [未发布]
 
+- **根因修复：平台入口标签被其他执行器关闭（2026-11-03 S5 微博）**：同一专用 Chrome 上另有执行器关闭了 weibo.com 首页标签，`select_page` 报「平台页面不是唯一」，整集停住。新增通用 `browser_runtime.home_anchor`（缺失时用 `Target.createTarget background=true focus=false` 后台重开，不前台；URL 不符拒绝），`x_home_anchor` 改为委托它，新增 `weibo_home_anchor`；微博发布/读回路径先 `select_page`，PublishError 时回退重开锚点。同步 Playwright 在 `time.sleep` 期间不处理新标签事件，新增 `_pump` 用已有页面的 `wait_for_timeout` 让事件进来。tests/test_weibo_home_anchor.py（13 例）。
+- **根因修复：YouTube 上传后立即读回误判失败（2026-11-03 S5E01，S4E06/E08 同类）**：刚上传时 videos.list 可能返回空 items，或视频处理中元数据未落定，旧逻辑当成错误 exit 2，作品实际已发布，只能靠 resume 补认。现：空 items 或「未处理完且元数据未落定」返回 pending（绝不判成功）；处理完成后仍不符才报错；频道不符永远报错。新增 `safe_reason()`，`main` 仅对固定文案的 PublishError 输出 reason 字段，避免把响应内容打进日志。tests/test_youtube_adapter.py 新增 YoutubeEarlyReadbackTest。
+
 - **根因修复：X 话题联想遮罩会复现（2026-11-02 S4E04）**：Escape 关闭后约 1s，X 在选区/焦点变化后重新查询话题并再次铺出空遮罩（同一专用 Chrome 另有执行器在用焦点模拟时更易触发），旧逻辑固定两轮即放弃。现只在被遮挡时按 Escape（最多 6 次），须连续 3 次（间隔 0.5s）观察无遮挡才放行。tests/test_x_typeahead_mask.py 新增复现用例。
 - 小红书标题规则（2026-11-02 作者确认）：标题取封面上的标题：「系列名」SxEyy｜封面标题（如「初馨」S1E01｜初见，作者 2026-11-02 17:00 确认），标题上限 20 字，超出提示并给缩写建议、不擅自截断，原钩子句放正文首句；`references/platform-copywriting.md` 小红书行补充，`assets/platform-fields.json` 新增 `xiaohongshu`（别名 xhs，清单模式，`limits.title_max_chars=20`）。
 - X 视频：已选片上传、但执行器停等导致云端回执不全（原媒体无法绑定）、未填写未发送的尝试，可经 `confirm_unsubmitted.py`（作者确认+只读时间线无匹配）→ `resume` 释放 → `run` 关闭原窗口新上传一次（复用 douyin_unsent_release，原窗口须在 x.com/compose/post 且编辑框为空）。测试 tests/test_x_video_release.py。
