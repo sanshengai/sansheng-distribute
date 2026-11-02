@@ -68,6 +68,36 @@ def fill_images(page, pack, assets, identity, saved, marker):
         page.remove_listener('response', capture.response)
 
 
+def dwell_bounds():
+    """Optional pause after upload/fill, before the single send click.
+
+    SANSHENG_X_DWELL="30,180" -> a random whole number of seconds in [30,180]."""
+    raw = os.environ.get('SANSHENG_X_DWELL', '').strip()
+    if not raw:
+        return None
+    try:
+        low, high = (int(x) for x in raw.split(','))
+    except ValueError as exc:
+        raise PublishError('SANSHENG_X_DWELL 须为 "下限,上限" 秒') from exc
+    if not 0 <= low <= high <= 600:
+        raise PublishError('SANSHENG_X_DWELL 超出 0–600 秒')
+    return low, high
+
+
+def dwell(page, saved, marker):
+    """Pause once (recorded as dwell_seconds); keeps the owned window's focus emulation alive."""
+    bounds = dwell_bounds()
+    if bounds is None or saved.get('dwell_seconds') is not None:
+        return None
+    import random
+    seconds = random.randint(*bounds)
+    checkpoint(saved, marker, dwell_seconds=seconds)
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        page.wait_for_timeout(int(min(left, 15) * 1000))
+    return seconds
+
+
 def submit_once(page, pack, identity, saved, marker, *, assets=None):
     if saved.get('submission_attempted_at') is not None or saved.get('accepted'):
         raise PublishError('X 已有发送尝试；只能独立查询，不再次点击')
@@ -87,7 +117,7 @@ def submit_once(page, pack, identity, saved, marker, *, assets=None):
 
     dismiss_topic_suggestions(page)
     ready()
-    button = page.locator('[role="dialog"][aria-modal="true"] [data-testid="tweetButton"]')
+    button = page.locator(SEND_BUTTON)
     if button.count() != 1 or not button.is_visible() or button.is_disabled():
         raise PublishError('X 发送按钮不唯一、不可见或禁用；不发送')
     checkpoint(saved, marker, submission_attempted_at=time.time(), state='submission_unknown')
@@ -137,11 +167,45 @@ def before_native_send(saved):
             and saved.get('native_response_count')==0 and saved.get('click_error_type')=='PublishError')
 
 
-def dismiss_topic_suggestions(page):
+SEND_BUTTON='[role="dialog"][aria-modal="true"] [data-testid="tweetButton"]'
+
+# X's hashtag typeahead leaves an empty, transparent, full-viewport dismiss
+# layer in #layers when the suggestion list closes or returns no rows (seen
+# 2026-11-02 S4E01: listbox gone, mask still over the send button, so the
+# background click guard correctly refused). Escape closes it; nothing else does.
+STALE_MASK = """node => {
+  const r=node.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+  const hit=document.elementFromPoint(x,y);
+  if(!hit || hit===node || node.contains(hit)) return false;
+  const layers=document.querySelector('#layers');
+  return !!layers && layers.contains(hit) && !hit.closest('[role="dialog"]')
+    && hit.children.length===0 && !(hit.textContent||'').trim()
+    && getComputedStyle(hit).position==='fixed';
+}"""
+
+
+def dismiss_topic_suggestions(page, *, rounds=6, settle_ms=500, stable=3):
+    """Close the hashtag typeahead (list or its leftover empty mask) with Escape only.
+
+    2026-11-02 S4E04: the empty mask can come back ~1 s after an Escape (X re-runs
+    the hashtag lookup after selection/focus changes), so two fixed rounds were not
+    enough. Press Escape only while masked, and return only after the button has been
+    unmasked for `stable` consecutive observations; bounded by `rounds` presses."""
     popup=page.locator('[role="listbox"][id^="typeaheadDropdownWrapped-"]')
-    if popup.count()==1:
-        page.keyboard.press('Escape')
-        if popup.count():raise PublishError('X 话题建议仍遮挡发送按钮；不点击发送')
+    button=page.locator(SEND_BUTTON)
+    def blocked():
+        return popup.count()==1 or (button.count()==1 and button.evaluate(STALE_MASK) is True)
+    presses=clear=0
+    while True:
+        if blocked():
+            if presses>=rounds:
+                raise PublishError('X 话题建议或其遮罩仍遮挡发送按钮；不点击发送')
+            page.keyboard.press('Escape');presses+=1;clear=0
+        else:
+            clear+=1
+            if clear>=stable or (presses==0 and clear>=1):
+                return presses
+        page.wait_for_timeout(settle_ms)
 
 
 def close_accepted_editor(page,saved,marker):
@@ -258,7 +322,13 @@ def dispatch(request_path, action, profile, lock_fd):
         if pack['content_type'] in {'video', 'images'}:
             x_post.check_publication_media(pack, saved.get('publication_media'))
     with engine.connect(profile, writing=action == 'execute') as connection:
-        anchor = engine.select_page(connection, 'x', path='/home', anchor=True)
+        try:
+            anchor = engine.select_page(connection, 'x', path='/home', anchor=True)
+        except PublishError:
+            if not hasattr(connection, 'new_browser_cdp_session'):
+                raise
+            from browser_runtime import x_home_anchor
+            anchor = x_home_anchor(connection)  # externally closed anchor: reopen in background
         if action == 'execute':
             if pack['content_type'] in {'video', 'images'}:
                 from browser_assets import stage
@@ -290,6 +360,7 @@ def dispatch(request_path, action, profile, lock_fd):
                     node = engine.empty_editor(page)
                     node.fill(pack['fields']['composed_text'])
                 saved['state'] = 'filled'; write_json(marker, saved)
+                dwell(page, saved, marker)
                 value = submit_once(page, pack, identity, saved, marker,
                                     assets=assets if pack['content_type'] == 'images' else None)
                 close_accepted_editor(page,saved,marker)

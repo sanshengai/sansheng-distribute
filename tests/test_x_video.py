@@ -1,3 +1,4 @@
+import sys
 import contextlib
 import copy
 import hashlib
@@ -94,6 +95,7 @@ class Node(base.Node):
         if self.kind=='file':return 'image/jpeg,image/png,video/mp4' if name=='accept' else None
         return super().get_attribute(name)
     def evaluate(self,script):
+        if getattr(sys.modules.get('x_publish_browser'),'STALE_MASK',None)==script:return False
         if script!=x_video.READ:raise AssertionError(script)
         return copy.deepcopy(self.page.video)
     def set_input_files(self,path,**kwargs):

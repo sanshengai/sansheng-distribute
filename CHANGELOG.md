@@ -2,6 +2,13 @@
 
 ## [未发布]
 
+- **根因修复：X 话题联想遮罩会复现（2026-11-02 S4E04）**：Escape 关闭后约 1s，X 在选区/焦点变化后重新查询话题并再次铺出空遮罩（同一专用 Chrome 另有执行器在用焦点模拟时更易触发），旧逻辑固定两轮即放弃。现只在被遮挡时按 Escape（最多 6 次），须连续 3 次（间隔 0.5s）观察无遮挡才放行。tests/test_x_typeahead_mask.py 新增复现用例。
+- 小红书标题规则（2026-11-02 作者确认）：标题取封面上的标题：「系列名」SxEyy｜封面标题（如「初馨」S1E01｜初见，作者 2026-11-02 17:00 确认），标题上限 20 字，超出提示并给缩写建议、不擅自截断，原钩子句放正文首句；`references/platform-copywriting.md` 小红书行补充，`assets/platform-fields.json` 新增 `xiaohongshu`（别名 xhs，清单模式，`limits.title_max_chars=20`）。
+- X 视频：已选片上传、但执行器停等导致云端回执不全（原媒体无法绑定）、未填写未发送的尝试，可经 `confirm_unsubmitted.py`（作者确认+只读时间线无匹配）→ `resume` 释放 → `run` 关闭原窗口新上传一次（复用 douyin_unsent_release，原窗口须在 x.com/compose/post 且编辑框为空）。测试 tests/test_x_video_release.py。
+- **根因修复：X 视频上传按进度等待（2026-11-02 S4E02）**：72MB 上传在网络慢时 INIT 后 66s 才出首个分片回执、104s 仍在出分片，旧固定 120s 上限在仍有进展时超时。`wait_painted(progress=…)` 改为：上传回执数有增长就继续等，连续 180s 无新回执才超时，总上限 20 分钟；等待进度写入 `upload_wait`。测试 tests/test_x_upload_progress_wait.py（4 例）。
+- **根因修复：X 新开后台窗口未进入焦点模拟（2026-11-02 S4E02）**：旧逻辑只在 about:blank 上请求一次 CDP 焦点模拟、异常被吞，跨源跳转到 x.com 后若该会话未生效就无从恢复，编辑页检查直接失败（未选文件）。新增 `x_compose_ready.ensure_focus`：导航后重新持有并核验 visible+focus，不通过则 detach 旧会话、重建、等待，最多 4 次，每次写入 `focus_attempts`；上传前同样核验（`focus_attempts_upload`）。不激活窗口。测试 tests/test_x_focus_retry.py（5 例）。
+- **根因修复：X 话题联想残留遮罩（2026-11-02 S4E01）**：正文末尾井号话题触发 X typeahead，列表关闭/无结果后在 `#layers` 留下空的透明全屏 fixed 层，盖住发送按钮；后台点击守卫正确拒点（`before_native_input`，无发送），任务记 submission_unknown。`dismiss_topic_suggestions` 现在同时识别 listbox 与该空遮罩（`STALE_MASK`：命中元素在 #layers、对话框外、无子节点无文字、fixed），仅按 Escape 关闭，最多两轮，仍遮挡则不点击。真实页面实测 Escape 后按钮命中恢复、文案不变。测试 tests/test_x_typeahead_mask.py（含 headless Chromium DOM 用例）。
+- X：`SANSHENG_X_DWELL="低,高"` 上传/填写后随机停留一次（记录 dwell_seconds），tests/test_x_dwell.py。
 - 平台填写项矩阵：新增 `references/platform-fields.md` 与 `assets/platform-fields.json`，`scripts/fields_check.py` 在封存前只读报告各平台标题/简介/话题/合集/AI声明/原创/封面/活动的缺项，并显式列出路线不支持的字段（tests/test_fields_check.py）。
 - Skill 双向同步：新增 `references/sync.md` 与 `scripts/skill_sync.py status/pull/push`；推送前自动 fetch、要求工作区干净、跑全量单元测试、脱敏扫描（私有文件、`/Users/<name>/` 路径、cookie/token、可选 `~/.config/sansheng-distribute/redact-patterns.txt` 字面量），只 fast-forward，禁止 force。测试夹具中的真实账号 UID 改为占位值。
 - 视频号后台标签经验（S4）：位置下拉需焦点模拟、原生上传回执读编辑器 fileList、分享链接由页面自身分享浮层生成；见 references/browser-execution.md。

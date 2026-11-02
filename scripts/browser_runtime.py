@@ -206,6 +206,30 @@ def select_page(connection, platform, *, target_id=None, path=None, anchor=False
     return matches[0]
 
 
+def x_home_anchor(connection, *, wait_s=20, sleep=time.sleep):
+    """The unique x.com/home anchor; reopen it in the background when it is missing.
+
+    2026-11-02: the dedicated Chrome is shared with other executors and the anchor
+    tab was closed externally several times (once between an accepted post and its
+    readback). A missing anchor is not a platform state: open exactly one
+    background, unfocused x.com/home target and select it. Duplicates or a missing
+    tab after reopening still fail; no existing tab is navigated or activated."""
+    def matches():
+        return [p for c in connection.contexts for p in c.pages
+                if urlsplit(p.url).netloc == 'x.com' and urlsplit(p.url).path == '/home']
+    if not matches():
+        session = connection.new_browser_cdp_session()
+        try:
+            session.send('Target.createTarget', {'url': 'https://x.com/home', 'background': True, 'focus': False})
+        finally:
+            try: session.detach()
+            except Exception: pass
+        waited = 0.0
+        while not matches() and waited < wait_s:
+            sleep(0.5); waited += 0.5
+    return select_page(connection, 'x', path='/home', anchor=True)
+
+
 def render_background_page(page):
     """Realize Chrome's unpainted background viewport without activating it.
 

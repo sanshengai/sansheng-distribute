@@ -63,10 +63,12 @@ def open_composer(page, saved, marker, identity):
     """Navigate the owned window and wait for the composer; on failure self-check then stop."""
     try:
         try: emulate_focus(page)
-        except Exception: pass  # enforced by assert_visible below
+        except Exception: pass  # re-established and verified by ensure_focus below
         page.goto('https://x.com/compose/post', wait_until='domcontentloaded', timeout=25000)
         node = wait_composer(page)
-        assert_visible(page)
+        def record(log):
+            saved['focus_attempts'] = log; write_json(marker, saved)
+        ensure_focus(page, record=record)
         return node
     except Exception as exc:
         self_check(page, saved, marker, identity)
@@ -75,14 +77,23 @@ def open_composer(page, saved, marker, identity):
         raise PublishError('X 后台编辑页未就绪；已只读收尾，不选文件、不发送') from exc
 
 
-def wait_painted(page, predicate, *, timeout_ms=120000, slice_ms=5000, polling=250):
+def wait_painted(page, predicate, *, timeout_ms=120000, slice_ms=5000, polling=250,
+                 progress=None, idle_ms=180000, cap_ms=1200000, record=None):
     """Wait for a page predicate while re-realizing the unfocused window each slice.
 
     Chrome may stop painting / decoding media in an unfocused, unpainted window, so
     X never starts its upload after file selection. A native capture per slice keeps
-    the surface realized without activating it. Bounded; raises PublishError."""
-    waited = 0
-    while waited < timeout_ms:
+    the surface realized without activating it. Bounded; raises PublishError.
+
+    progress: optional callable returning a monotonically growing marker (e.g. the
+    number of native upload receipts). 2026-11-02 S4E02: a 72 MB upload was still
+    receiving chunk receipts (INIT, then APPENDMULTI at 66/67/68/104 s) when the old
+    fixed 120 s limit fired. With progress, the wait only times out after idle_ms
+    without any new progress, and never beyond cap_ms in total."""
+    waited = idle = 0
+    last = progress() if progress else None
+    limit_total = cap_ms if progress else timeout_ms
+    while waited < limit_total and (progress is None or idle < idle_ms):
         try:
             realize(page)
         except Exception:
@@ -91,7 +102,15 @@ def wait_painted(page, predicate, *, timeout_ms=120000, slice_ms=5000, polling=2
             page.wait_for_function(predicate, timeout=slice_ms, polling=polling)
             return
         except Exception:
-            waited += slice_ms
+            waited += slice_ms; idle += slice_ms
+        if progress:
+            now = progress()
+            if now != last:
+                last, idle = now, 0
+            if record is not None:
+                record(dict(waited_ms=waited, idle_ms=idle, progress=now))
+    if progress and idle >= idle_ms:
+        raise PublishError(f'X 后台视频上传 {idle_ms//1000}s 无新进展；保留原窗口只读核对，不重传')
     raise PublishError('X 后台视频处理在上限内未就绪；保留原窗口只读核对，不重传')
 
 
@@ -164,6 +183,47 @@ def emulate_focus(page):
 
 
 VISIBLE_CHECK = True
+
+
+def release_focus(page):
+    """Drop a held emulation session (it may belong to a dead renderer)."""
+    session = _HELD.pop(id(page), None)
+    if session is not None:
+        try: session.detach()
+        except Exception: pass
+
+
+def ensure_focus(page, *, attempts=4, wait_ms=750, record=None, force=False):
+    """Hold focus emulation and prove it took effect, re-establishing it if not.
+
+    2026-11-02 S4E02: a freshly opened owned window stayed hidden/unfocused at the
+    composer check. Emulation was requested once on about:blank before the
+    cross-origin navigation and any failure was swallowed, so a session that never
+    applied (or was lost with the renderer swap) could not recover. Now: (re)hold
+    after navigation, verify, and on failure detach + re-create the session and wait,
+    bounded; every attempt is recorded. Never activates the window."""
+    if not (VISIBLE_CHECK or force):
+        return None
+    log = []
+    for n in range(attempts):
+        try:
+            emulate_focus(page); err = None
+        except Exception as exc:
+            err = type(exc).__name__
+        try:
+            state = page.evaluate('({vis:document.visibilityState,focus:document.hasFocus()})')
+        except Exception as exc:
+            state = {}; err = err or type(exc).__name__
+        ok = isinstance(state, dict) and state.get('vis') == 'visible' and state.get('focus') is True
+        log.append(dict(attempt=n + 1, vis=state.get('vis') if isinstance(state, dict) else None,
+                        focus=state.get('focus') if isinstance(state, dict) else None, error=err))
+        if record is not None:
+            record(log)
+        if ok:
+            return state
+        release_focus(page)
+        page.wait_for_timeout(wait_ms)
+    raise PublishError(f'X 后台窗口重试 {attempts} 次仍未进入可见/聚焦模拟；不选文件（最后状态 {log[-1]}）')
 
 
 def assert_visible(page, force=False):

@@ -37,7 +37,10 @@
    "notes": {"topics": "API tags + 简介内 #话题文本", "collection": "播放列表，按季新建"}},
   "x": {"route": "x_publish_browser 网页（作者书面授权）", "cover_ratio": "无", "last_verified": "2026-11-01", "evidence": "chuxin-s3-x-20261031/X-S3回执.md",
    "fields": {"title": "not_applicable", "description": "auto", "topics": "auto", "collection": "not_applicable", "ai_declaration": "not_applicable", "original": "not_applicable", "cover": "not_applicable", "activity": "not_applicable"},
-   "notes": {"topics": "正文井号文本，非原生实体"}}
+   "notes": {"topics": "正文井号文本，非原生实体"}},
+  "xiaohongshu": {"route": "本地发布包 + 作者手机 App 手动发布（本 Skill 未实现执行器）", "cover_ratio": "3:4", "last_verified": "2026-11-02", "evidence": "chuxin-s1-xhs-20261101/发布清单.md", "limits": {"title_max_chars": 20},
+   "fields": {"title": "checklist", "description": "checklist", "topics": "checklist", "collection": "checklist", "ai_declaration": "checklist", "original": "checklist", "cover": "checklist", "activity": "not_applicable"},
+   "notes": {"title": "标题取封面上的标题：「系列名」SxEyy｜封面标题（如「初馨」S1E01｜初见），≤20 字，超出提示并给缩写建议；钩子句放正文首句", "topics": "App 内 # 逐个选中原生话题", "ai_declaration": "勾选「笔记含AI合成内容」"}}
  },
- "aliases": {"bilibili": "bilibili_cli", "wxchannels": "wechat_channels"}
+ "aliases": {"bilibili": "bilibili_cli", "wxchannels": "wechat_channels", "xhs": "xiaohongshu"}
 }

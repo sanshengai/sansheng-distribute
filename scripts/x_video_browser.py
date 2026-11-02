@@ -25,14 +25,16 @@ def fill(page, pack, assets, identity, saved, marker):
         # Native video selection may reset text; do it before filling the copy.
         engine.assert_identity(page,identity);engine.assert_no_warning(page);engine.empty_editor(page)
         saved['state']='before_native_selection';write_json(marker,saved)
-        from x_compose_ready import wait_painted,emulate_focus,assert_visible,Diagnostics
-        try:emulate_focus(page)
-        except Exception:pass
-        assert_visible(page)
+        from x_compose_ready import wait_painted,ensure_focus,Diagnostics
+        def record(log):
+            saved['focus_attempts_upload']=log;write_json(marker,saved)
+        ensure_focus(page,record=record)
         with Diagnostics(page) as diag:
             try:
                 file.set_input_files(checked_path(assets[0]),timeout=15000)
-                wait_painted(page,x_video.READY,timeout_ms=120000)
+                wait_painted(page,x_video.READY,timeout_ms=120000,
+                             progress=lambda:len(capture.events),
+                             record=lambda v:saved.__setitem__('upload_wait',v))
             except Exception:
                 saved['upload_diagnostics']=diag.snapshot();write_json(marker,saved)
                 raise

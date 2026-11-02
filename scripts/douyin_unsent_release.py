@@ -22,13 +22,24 @@ WEIBO_STATES = {'before_file_selection', 'selected_once'}
 RELEASE_KEYS = ('release_original_state', 'release_verified_at', 'release_confirmation_digest')
 EDITOR_PATHS = {'/creator-micro/content/upload', '/creator-micro/content/post/video'}
 WEIBO_EDITOR = ('weibo.com', '/upload/channel')
+# X video (2026-11-02 S4E02): the one file selection happened and the upload ran,
+# but the executor stopped waiting before the receipts were complete, so the
+# original media cannot be bound. Never filled (copy is typed only after the
+# upload is verified), never dwelt, no send checkpoint.
+X_STATES = {'before_native_selection'}
+X_EDITOR = ('x.com', '/compose/post')
+X_FILLED = ('native_video', 'cloud_video', 'dwell_seconds')
 FILLED = ('native_video', 'cover', 'cover_upload', 'fields_filled_at', 'dwell_seconds', 'video_verified_at')
 
 
 def eligible(saved, platform):
-    if platform not in ('douyin', 'weibo') or any(k in saved for k in pre.SENDING):
+    if platform not in ('douyin', 'weibo', 'x') or any(k in saved for k in pre.SENDING):
         return False
     state = saved.get('release_original_state', saved.get('state'))
+    if platform == 'x':
+        return (state in X_STATES and saved.get('submission_protocol') == 2
+                and not any(k in saved for k in X_FILLED) and bool(saved.get('target_id'))
+                and bool(saved.get('upload_events') or saved.get('upload_errors')))
     if platform == 'weibo':
         return (state in WEIBO_STATES and not any(k in saved for k in FILLED)
                 and bool(saved.get('target_id')) and bool(saved.get('anchor_target_id')))
@@ -58,6 +69,14 @@ def check_window(pages, platform='douyin'):
         raise PublishError('原窗口不唯一；保持未知')
     for page in pages:
         u = urlsplit(page.url)
+        if platform == 'x':
+            if (u.netloc, u.path) != X_EDITOR:
+                raise PublishError('X 原窗口已离开编辑页；不能认定未发送')
+            # X renders the textbox and an inner node with the same test id.
+            texts = page.locator('[data-testid="tweetTextarea_0"]').evaluate_all('ns=>ns.map(n=>n.innerText)')
+            if not texts or any(t.strip(' \t\r\n\u200b\ufeff') for t in texts):
+                raise PublishError('X 原窗口已有文案；不能认定未填写未发送')
+            continue
         if platform == 'weibo':
             if (u.netloc, u.path) != WEIBO_EDITOR:
                 raise PublishError('微博原窗口已离开视频发布页；不能认定未发送')

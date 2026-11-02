@@ -44,6 +44,7 @@ class Button:
     def count(self):return 1
     def is_visible(self):return True
     def is_disabled(self):return False
+    def evaluate(self,script):return False  # STALE_MASK: no leftover typeahead layer
 
 
 class Composer(Page):
