@@ -11,8 +11,9 @@ class C:
     def __init__(s):s.s=S()
     def new_cdp_session(s,p):return s.s
 class P:
-    def __init__(s,state):s.context=C();s.state=state
-    def evaluate(s,js):return s.state
+    def __init__(s,state):s.context=C();s.state=state;s.waits=[]
+    def evaluate(s,js):return s.state(s) if callable(s.state) else s.state
+    def wait_for_timeout(s,ms):s.waits.append(ms)
 class FocusTests(unittest.TestCase):
     def setUp(self):f.ENABLED=True;f._HELD.clear()
     def test_holds_session_without_detach_and_passes_when_visible(self):
@@ -26,6 +27,30 @@ class FocusTests(unittest.TestCase):
     def test_never_activates_os_window(self):
         src=Path(f.__file__).read_text()
         for bad in ('bring_to_front','Page.bringToFront','activateTarget'):self.assertNotIn(bad,src)
+class FocusRetryTests(unittest.TestCase):
+    def setUp(self):f.ENABLED=True;f._HELD.clear()
+    def test_stale_session_is_recreated_then_passes(self):
+        sessions=[]
+        class C2:
+            def new_cdp_session(s,p):x=S();sessions.append(x);return x
+        n=[0]
+        def st(p):
+            n[0]+=1;return dict(vis='visible',focus=True) if n[0]>=3 else dict(vis='hidden',focus=False)
+        p=P(st);p.context=C2();rec=[]
+        self.assertEqual(f.ensure(p,record=rec.append)['vis'],'visible')
+        self.assertEqual(len(sessions),3);self.assertTrue(sessions[0].detached and sessions[1].detached)
+        self.assertFalse(sessions[2].detached);self.assertEqual(len(p.waits),2);self.assertEqual(len(rec[-1]),3)
+    def test_bounded_and_reports_last_state(self):
+        p=P(dict(vis='hidden',focus=False))
+        with self.assertRaises(PublishError) as cm:f.ensure(p,attempts=3)
+        self.assertIn('重试 3 次',str(cm.exception));self.assertEqual(len(p.waits),2);self.assertNotIn(id(p),f._HELD)
+    def test_evaluate_error_is_retried(self):
+        n=[0]
+        def st(p):
+            n[0]+=1
+            if n[0]==1:raise RuntimeError('target swapped')
+            return dict(vis='visible',focus=True)
+        self.assertTrue(f.ensure(P(st))['focus'])
 class CaretTests(unittest.TestCase):
     def test_caret_restored_before_topic_button(self):
         src=(Path(f.__file__).parent/'douyin_browser.py').read_text()

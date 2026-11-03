@@ -34,3 +34,16 @@
 ## 研究线索和边界
 
 对 [Social Auto Upload 固定版本的支付宝上传器](https://github.com/dreammis/social-auto-upload/blob/3847fff01f5434a8a32829833163cd6723cabc59/uploader/alipay_uploader/main.py)仅作页面流程线索：该版本仅以页面或登录框判断会话，未在上述流程绑定生活号 ID；指定封面、合集或 AI 声明失败可能只警告；未观察到提交信号时可能再次点击，且将“提交审核”当成功。这些行为不能作为本 Skill 的成功条件，不直接调用其自动投稿器。页面和平台规则可能变化，必须现场重核。
+
+## 发前查重与业务修订重发（`scripts/alipay_list_guard.py`）
+
+浏览器只负责观察内容管理页（页面 URL、平台显示的生活号 ID、**所有分页**的原生 `publishList` 回应），判定交给 `evaluate()`，且一律 fail closed：页面不在 `c.alipay.com` 内容管理页、未见生活号 ID（被跳登录）、没有列表回应、回应非 ok/缺 `total`、或收集作品数少于 `total`（分页未读完）都返回 `unverifiable`（退出码 5），**不能当作“没有同名作品”**。同名命中返回 `duplicate`（2）。
+
+作品被平台限制推荐（`published_limited`）后，作者明确给出业务修订（例如换成去掉结尾引导的平台专用版）才可重发：用 `create-resend` 为每集新建一条私有任务（追加写 `0600` JSONL），登记新视频与封面 sha256、修订原因和被替代的旧作品 ID。同一集同一视频或已被声明替代的旧作品不能再建任务；不改旧作品、旧任务和旧记录，也不删除旧作品。查重带 `--supersedes` 时，只有同名命中**全部**属于声明的旧 ID 才返回 `superseded_only`；声明的旧 ID 不在完整列表中返回 `unverifiable`。发布后用 `--expected-new 1` 读回，必须恰好多出一条新作品。
+
+```sh
+python3 scripts/alipay_list_guard.py create-resend --ledger /private/resend.jsonl --ep S1E08 \
+  --video /path/S1E08-alipay.mp4 --cover /path/S1E08.png --title '…' --description '…' \
+  --supersedes <旧作品ID> --revision '作者给出的业务修订原话'
+python3 scripts/alipay_list_guard.py evaluate /private/observation.json --ep S1E08 --supersedes <旧作品ID>
+```

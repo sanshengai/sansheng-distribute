@@ -178,3 +178,7 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 ## YouTube 上传后读回 pending
 
 上传后 videos.list 空 items 或处理中元数据未落定，适配器返回 pending 而不是失败；稍后 `resume` 再读回。处理完成后字段仍不符才是真错误；频道不符直接报错。不要因 pending 重发。
+
+## 抖音「后台窗口未进入可见/聚焦模拟」（2026-11-03 S5E02，upload 阶段、未选文件）
+
+根因：`douyin_focus.ensure` 只检查一次，且按 id(page) 缓存的 CDP 会话可能建于跨域导航/渲染进程切换之前，已失效却不会重建，于是直接停。已修：与 X `ensure_focus` 相同，校验失败即 detach 并重建会话、等待后重试（默认 4 次，有界、逐次记录），从不前置窗口。恢复：尝试记录为 `attempted/phase=upload/video=None`、上传事件为空、无发送字段时，按「抖音首次上传前尝试」走作者确认 → `resume`（prepared）→ `run`。
