@@ -69,10 +69,12 @@ class Page:
     def locator(self,selector):return Node(self,'video' if selector=='video' else 'prompt')
     def get_by_text(self,text,**kw):return Node(self,'video_tab')
     def wait_for_function(self,*a,**kw):pass
+    def wait_for_timeout(self,ms):pass
 
 
 class CoverTests(unittest.TestCase):
     def setUp(self):
+        p=patch.object(c,'READBACK_SETTLE_SECONDS',0.05);p.start();self.addCleanup(p.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.assets=[]
         for role in c.ROLES:
@@ -135,6 +137,18 @@ class CoverTests(unittest.TestCase):
         with patch.object(c,'preview',side_effect=cropped):
             with self.assertRaisesRegex(PublishError,'额外裁切'):self.upload()
         self.assertEqual(self.records,{})
+
+    def test_interim_preview_then_final_settles_into_receipt(self):
+        original=c.preview;calls={'n':0}
+        def interim(page,role,**kwargs):
+            value=original(page,role,**kwargs)
+            if role=='portrait':
+                calls['n']+=1
+                if calls['n']<3:value['width'],value['height']=300,400
+            return value
+        with patch.object(c,'preview',side_effect=interim):self.upload()
+        self.assertGreaterEqual(calls['n'],3);self.assertIn('portrait',self.records)
+        self.assertEqual((self.records['portrait']['width'],self.records['portrait']['height']),(899,1200))
 
     def test_native_wrong_source_blocks_save_and_receipt(self):
         self.page.wrong_source=True

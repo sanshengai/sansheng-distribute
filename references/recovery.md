@@ -188,3 +188,9 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 现象：`run` 起执行接力后，driver 在打开发表页时断网（ERR_INTERNET_DISCONNECTED），接力超时关闭（`status=closed, action=execute`），账本停在 `submission_unknown`、无远端 ID。普通 `resume` 只能走 `recover-wechat_channels` 认领候选作品，无法证明未提交。
 条件全部满足才释放：接力目录只有 `task.json`/`lease.lock`（无回应、无回执）；请求目录除 `.json/.social.json/.agent` 外无痕迹；账本事件只有空 `submission_unknown`；同账号只读作品列表 `matches=[]`；作者书面确认（原话、带时区时间）。
 步骤：只读列表核对 → `python3 scripts/channels_unsubmitted.py --state-dir … --key … --identity <视频号ID> --statement … --confirmed-at … --listing …` → `publish.py resume`（记 not_submitted，账本回 prepared）→ `run` 正常执行一次。确认后接力记录再有任何变化即拒绝。
+
+## 抖音封面读回取到过渡图（2026-11-04 S6E02）
+
+现象：封面弹窗保存后，读回报「未改变或发生额外裁切」；事后同一窗口里竖封面已是 1078×1440（在容差内），未点发布。
+根因：保存后预览先显示过渡图，最终转码图稍后才替换；旧代码在预览 src 一变就只读一次。已修：读回在 `READBACK_SETTLE_SECONDS`（20s）内反复读取，直到最终图对象变化且尺寸在容差内；超时报错并带上读回尺寸。
+恢复同上一节：只读核对原窗口封面与作品列表（无该集）→ `confirm_unsubmitted.py`（不加 --release）→ `resume` → `run`（readback_only，不重传）。

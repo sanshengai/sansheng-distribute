@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from pathlib import Path
-import re
+import re, time
 from urllib.parse import urlsplit
 from browser_assets import checked_path
 from publish_core import PublishError, digest
@@ -78,6 +78,9 @@ def encode(page, asset, role):
         raise PublishError('抖音封面解码或比例不符；竖版须3:4、横版须4:3，边长至多4096，不自动裁切') from exc
     return dict(result, source_asset_id=asset['id'], source_sha256=asset['sha256'],
                 native_sha256=hashlib.sha256(native).hexdigest())
+
+
+READBACK_SETTLE_SECONDS=20
 
 
 def within(actual, source):
@@ -192,10 +195,21 @@ def upload(page, assets, prepared, *, progress, receipt):
             }''',arg=[ROLES[role][0],originals[role]],timeout=20000)
         except Exception as exc:
             raise PublishError('抖音封面保存后预览未更新；不报告完成') from exc
-        actual=preview(page,role,include_object=True)
-        raw=control(page,role).locator('img').get_attribute('src')
-        if raw in originals[role] or not within(actual,source):
-            raise PublishError('抖音封面保存结果未改变或发生额外裁切；不报告完成')
+        # 2026-11-04 S6E02: the saved preview can first render an interim image and only
+        # then the final transcode (the window later showed 1078x1440, within tolerance).
+        # Re-read until the final image settles instead of judging the first frame.
+        deadline=time.monotonic()+READBACK_SETTLE_SECONDS;actual=raw=None
+        while True:
+            try:
+                actual=preview(page,role,include_object=True)
+                raw=control(page,role).locator('img').get_attribute('src')
+            except PublishError:
+                actual=None
+            if actual and raw not in originals[role] and within(actual,source):break
+            if time.monotonic()>=deadline:
+                seen=f"{actual['width']}x{actual['height']}" if actual else '不可读'
+                raise PublishError(f"抖音封面保存结果未改变或发生额外裁切（读回 {seen}，源 {source['width']}x{source['height']}，未改变={raw in originals[role]}）；不报告完成")
+            page.wait_for_timeout(500)
         receipt(role,dict(actual,source_asset_id=source['source_asset_id'],source_sha256=source['source_sha256'],
                           native_sha256=source['native_sha256']))
     restore_video(page)
