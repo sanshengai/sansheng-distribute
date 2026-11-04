@@ -1476,6 +1476,13 @@ def _run_locked(manifest, ident, profile, store, *, resume=False, advance=False,
         raise PublishError("尚未执行，请使用 run")
     request["job"] = store.status(key)
     write_json(request_path, request)
+    if resume and recover_remote_id is None and target['platform'] == 'wechat_channels':
+        # Author-confirmed: relay closed before any reply; record not_submitted without a browser relay.
+        import channels_unsubmitted
+        identity = (((profile or {}).get('accounts') or {}).get(target['account']) or {}).get('public_identities', {}).get('wechat_channels')
+        released = channels_unsubmitted.recover(request, request_path.parent, identity) if identity else None
+        if released is not None:
+            return store.save_observation(key, released, verified=True)
     with store.measure(key,'verify'):
         if youtube_bundle:
             from youtube_adapter import preflight_youtube

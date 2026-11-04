@@ -182,3 +182,9 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 ## 抖音「后台窗口未进入可见/聚焦模拟」（2026-11-03 S5E02，upload 阶段、未选文件）
 
 根因：`douyin_focus.ensure` 只检查一次，且按 id(page) 缓存的 CDP 会话可能建于跨域导航/渲染进程切换之前，已失效却不会重建，于是直接停。已修：与 X `ensure_focus` 相同，校验失败即 detach 并重建会话、等待后重试（默认 4 次，有界、逐次记录），从不前置窗口。恢复：尝试记录为 `attempted/phase=upload/video=None`、上传事件为空、无发送字段时，按「抖音首次上传前尝试」走作者确认 → `resume`（prepared）→ `run`。
+
+## 视频号：接力从未回应的结果未知任务（作者确认释放，2026-11-04 S5E06）
+
+现象：`run` 起执行接力后，driver 在打开发表页时断网（ERR_INTERNET_DISCONNECTED），接力超时关闭（`status=closed, action=execute`），账本停在 `submission_unknown`、无远端 ID。普通 `resume` 只能走 `recover-wechat_channels` 认领候选作品，无法证明未提交。
+条件全部满足才释放：接力目录只有 `task.json`/`lease.lock`（无回应、无回执）；请求目录除 `.json/.social.json/.agent` 外无痕迹；账本事件只有空 `submission_unknown`；同账号只读作品列表 `matches=[]`；作者书面确认（原话、带时区时间）。
+步骤：只读列表核对 → `python3 scripts/channels_unsubmitted.py --state-dir … --key … --identity <视频号ID> --statement … --confirmed-at … --listing …` → `publish.py resume`（记 not_submitted，账本回 prepared）→ `run` 正常执行一次。确认后接力记录再有任何变化即拒绝。
