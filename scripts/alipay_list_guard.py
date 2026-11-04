@@ -60,6 +60,22 @@ def evaluate(page_url,account_id_seen,responses,ep,supersedes=(),expected_new=0)
     else:out.update(status=DUPLICATE,reasons=['已有同名作品且不在本次替代清单'])
     return out
 
+def evaluate_series(page_url,account_id_seen,responses,eps):
+    """季收尾核对（发后，不是发前查重）：每集同名作品恰好 1 条。
+    缺集或某集多于 1 条 → duplicate（不通过）；列表不可完整读取 → unverifiable。
+    教训（2026-11-04 S5）：收尾用单集发前查重会把刚发的那集判成「已有同名作品」。"""
+    base=evaluate(page_url,account_id_seen,responses,eps[0])
+    out=dict(eps=list(eps),total=base['total'],collected=base['collected'],per_ep={},reasons=[])
+    if base['status']==UNVERIFIABLE:
+        out.update(status=UNVERIFIABLE,reasons=base['reasons']);return out
+    seen,_,_=_items(responses)
+    for ep in eps:
+        hits=[{k:i.get(k) for k in FIELDS} for i in seen.values() if title_key(ep) in i['title']]
+        out['per_ep'][ep]=hits
+        if len(hits)!=1:out['reasons'].append(f'{ep} 同名作品 {len(hits)} 条，期望 1')
+    out['status']=CLEAR if not out['reasons'] else DUPLICATE
+    return out
+
 def sha256(p):
     h=hashlib.sha256()
     with open(p,'rb') as f:

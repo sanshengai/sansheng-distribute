@@ -59,3 +59,23 @@ class Resend(unittest.TestCase):
         o=self.d/'o.json';o.write_text(json.dumps({'url':'https://auth.alipay.com/x','account_id_seen':False,'responses':[]}))
         self.assertEqual(g.main(['evaluate',str(o),'--ep','S5E02']),5)
 if __name__=='__main__':unittest.main()
+
+
+class SeriesCloseoutTests(unittest.TestCase):
+    URL='https://c.alipay.com/page/content-creation/posts?appId=1'
+    def row(self,ep,cid):return {'contentId':cid,'title':f'「初馨」{ep}｜x'}
+    def test_each_episode_exactly_one_passes(self):
+        rows=[self.row(f'S5E0{i}',f'c{i}') for i in range(1,9)]
+        r=g.evaluate_series(self.URL,True,[resp(rows)],[f'S5E0{i}' for i in range(1,9)])
+        self.assertEqual(r['status'],g.CLEAR);self.assertEqual(g.EXIT[r['status']],0)
+    def test_just_published_last_episode_is_not_duplicate(self):
+        rows=[self.row('S5E08','new')]
+        self.assertEqual(g.evaluate(self.URL,True,[resp(rows)],'S5E08')['status'],g.DUPLICATE)  # 发前查重语义
+        self.assertEqual(g.evaluate_series(self.URL,True,[resp(rows)],['S5E08'])['status'],g.CLEAR)
+    def test_missing_or_extra_fails(self):
+        rows=[self.row('S5E01','a'),self.row('S5E01','b')]
+        r=g.evaluate_series(self.URL,True,[resp(rows)],['S5E01','S5E02'])
+        self.assertEqual(r['status'],g.DUPLICATE);self.assertEqual(len(r['reasons']),2)
+    def test_unreadable_list_is_unverifiable(self):
+        r=g.evaluate_series('https://auth.alipay.com/login/index.htm',None,[],['S5E01'])
+        self.assertEqual(r['status'],g.UNVERIFIABLE)
