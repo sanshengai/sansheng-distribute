@@ -1148,6 +1148,14 @@ def safe_adapter_failure(stderr):
     if not isinstance(stderr, str) or len(stderr) > 16_384: return ''
     try: value = json.loads(stderr)
     except (ValueError, TypeError): return ''
+    if isinstance(value, dict) and value.get('ok') is False and value.get('error') == 'YouTube 适配器未完成；保持原任务并先核验':
+        # youtube_adapter.safe_reason: only its own fixed PublishError text or an exception
+        # class name. Re-check here so a URL, token or long prose is never echoed.
+        reason = value.get('reason')
+        if (isinstance(reason, str) and 0 < len(reason) <= 80 and '\n' not in reason
+                and not any(m in reason.lower() for m in ('://', 'token', 'upload_id', 'bearer', 'key=', 'secret', 'session_url'))):
+            return f'；YouTube 原因：{reason}'
+        return ''
     if not isinstance(value, dict) or value.get('error_type') != 'WechatError': return ''
     code = value.get('errcode')
     hints = {
