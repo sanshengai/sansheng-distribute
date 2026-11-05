@@ -47,3 +47,5 @@ python3 scripts/alipay_list_guard.py create-resend --ledger /private/resend.json
   --supersedes <旧作品ID> --revision '作者给出的业务修订原话'
 python3 scripts/alipay_list_guard.py evaluate /private/observation.json --ep S1E08 --supersedes <旧作品ID>
 ```
+
+同名子串默认是《初馨》格式「「初馨」S6E01｜」。其他系列（如《上下五千年 | 第 1 集：盘古开天》）用 `--match '第 1 集：盘古开天'`（Python 为 `evaluate(..., match=...)`、`evaluate_series(..., matches={ep: 子串})`）显式给出能唯一识别该集的标题子串；子串须含集号与本集标题，避免第 1 集误中第 10 集。
