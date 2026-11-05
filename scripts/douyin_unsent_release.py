@@ -43,8 +43,16 @@ def eligible(saved, platform):
     if platform == 'weibo':
         return (state in WEIBO_STATES and not any(k in saved for k in FILLED)
                 and bool(saved.get('target_id')) and bool(saved.get('anchor_target_id')))
-    return (state in STATES and saved.get('phase') == 'upload'
-            and bool(saved.get('target_id')) and bool(saved.get('anchor_target_id')))
+    if not (saved.get('target_id') and saved.get('anchor_target_id')):
+        return False
+    if state in STATES and saved.get('phase') == 'upload':
+        return True
+    # 2026-11-05 S6E02: filled editor stopped at cover readback (never sent) whose
+    # preview later expired, so same-window resume cannot bind the video. Only reachable
+    # here once the author chose release (douyin_publish_browser skips resume then).
+    import douyin_uploaded_resume as up
+    base = dict(original(saved), resume_original_state=None)
+    return state in ('uploaded', 'attempted') and up.cover_pending(base) and not up.unclicked(base)
 
 
 def original(saved):

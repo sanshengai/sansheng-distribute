@@ -141,6 +141,13 @@ class CoverPendingTests(unittest.TestCase):
   self.assertTrue(r.applies(self.base(phase='cover_portrait_complete')))
   for kw in (dict(submission_attempted_at=1),dict(schedule={}),dict(phase='cover_portrait_upload'),dict(phase='readback')):
    with self.subTest(kw=kw):self.assertFalse(r.applies(self.base(**kw)))
+ def test_release_covers_cover_readback_stop_without_send(self):
+  import douyin_unsent_release as u
+  base=self.base(anchor_target_id='a')
+  self.assertTrue(u.eligible(base,'douyin'))
+  self.assertTrue(u.eligible(dict(base,state='unsent_release_verified',release_original_state='uploaded'),'douyin'))
+  for kw in (dict(submission_attempted_at=1),dict(schedule={}),dict(phase='readback'),dict(anchor_target_id=None),dict(state='submission_unknown')):
+   with self.subTest(kw=kw):self.assertFalse(u.eligible(self.base(**dict(dict(anchor_target_id='a'),**kw)),'douyin'))
  def test_cover_tolerance_rejects_real_crop(self):
   import douyin_cover as c
   src=dict(width=1080,height=1440)

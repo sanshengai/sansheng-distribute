@@ -198,3 +198,7 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 ## YouTube 合集加入结果未知（2026-11-05）
 
 合集 POST 报错后组件记为 unknown 并占账号锁。`publish.py youtube-component-release <组件key>` 先只读核对；仅当读回证明视频不在该合集（absent）时记 not_submitted、回到 prepared、撤销组件授权并释放账号锁；已在合集则记 verified；无法证明则保持 unknown。释放后须重新 authorize 再 run。合集位置不得超过当前条目数（空列表先加第 0 位）。视频 ID 以 `-` 开头时命令行写 `--video-id=<ID>`。
+
+## 抖音封面读回中断后预览过期：作者选择释放（2026-11-05 S6E02）
+
+原窗口停在 cover_*_readback、从未发送，但隔夜后预览签名过期（video readyState=0、error=4），同窗续跑核对无法绑定视频。作者书面同意关窗重传时：只读列表无匹配 → `confirm_unsubmitted.py --release` → `resume`（not_submitted）→ `run`（关闭原窗口、归档 `.released-*`、新上传一次）。有任何发送痕迹、schedule 或已点击记录一律拒绝。
