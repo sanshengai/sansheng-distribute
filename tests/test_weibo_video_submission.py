@@ -125,6 +125,21 @@ class InputContract(unittest.TestCase):
             nodes.value=values
             with self.assertRaises(PublishError):native.default_options(Page())
 
+    def test_ai_highlight_switch_accepted_only_when_off_and_unique(self):
+        class Nodes:
+            def evaluate_all(self,*args):return self.value
+        class Page:
+            def locator(self,*args):return nodes
+        base=[dict(checked=False,on='true',off='false',label=None)]*2+[dict(checked=True,on='1',off='0',label=None)]
+        ai=dict(checked=False,on='true',off='false',label='开启AI高光片段')
+        nodes=Nodes();nodes.value=[ai]+base
+        self.assertEqual(native.default_options(Page())[-1],dict(ai_highlight=False))
+        nodes.value=base
+        self.assertEqual(len(native.default_options(Page())),3)
+        for values in ([dict(ai,checked=True)]+base,[ai,ai]+base,[ai]+base[:2],[ai]+base+[base[0]]):
+            nodes.value=values
+            with self.assertRaises(PublishError):native.default_options(Page())
+
 
 class Button:
     def count(self):return 1

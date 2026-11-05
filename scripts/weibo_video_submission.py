@@ -71,14 +71,30 @@ def cover_pid(page):
     return pid
 
 
+AI_HIGHLIGHT='开启AI高光片段'
+SWITCHES_JS='''(ns,ai)=>ns.map(n=>{const i=n.querySelector('input[type=checkbox]');
+  let r=n,lab=null;for(let k=0;k<6&&r.parentElement;k++){r=r.parentElement;if(r.querySelectorAll('label.woo-switch-main').length>1)break;
+    if((r.innerText||'').includes(ai)){lab=ai;break;}}
+  return {checked:i?.checked,on:i?.getAttribute('true-value'),off:i?.getAttribute('false-value'),label:lab};})'''
+
+
 def default_options(page):
-    """Only the observed category/relation-off and clipping-on UI shape."""
-    values=page.locator('label.woo-switch-main:visible').evaluate_all('''ns=>ns.map(n=>{const i=n.querySelector('input[type=checkbox]');return {checked:i?.checked,on:i?.getAttribute('true-value'),off:i?.getAttribute('false-value')};})''')
-    if (not isinstance(values,list) or len(values)!=3
-            or sum(v==dict(checked=False,on='true',off='false') for v in values)!=2
-            or sum(v==dict(checked=True,on='1',off='0') for v in values)!=1):
+    """Only the observed category/relation-off and clipping-on UI shape.
+
+    2026-11-05：微博新增「开启AI高光片段」开关（默认关闭）。仅当该开关可唯一识别且保持关闭时接受，
+    不替作者打开；其余三项仍须为原核对形态。"""
+    values=page.locator('label.woo-switch-main:visible').evaluate_all(SWITCHES_JS,AI_HIGHLIGHT)
+    if not isinstance(values,list):
         raise PublishError('微博视频分类、关联或剪辑设置不在已核对范围；不改变作者选项')
-    return values
+    ai=[v for v in values if isinstance(v,dict) and v.get('label')==AI_HIGHLIGHT]
+    if len(ai)>1 or any(v!=dict(checked=False,on='true',off='false',label=AI_HIGHLIGHT) for v in ai):
+        raise PublishError('微博「开启AI高光片段」开关不唯一或已被打开；不改变作者选项')
+    rest=[{k:v.get(k) for k in ('checked','on','off')} for v in values if not (isinstance(v,dict) and v.get('label')==AI_HIGHLIGHT)]
+    if (len(rest)!=3
+            or sum(v==dict(checked=False,on='true',off='false') for v in rest)!=2
+            or sum(v==dict(checked=True,on='1',off='0') for v in rest)!=1):
+        raise PublishError('微博视频分类、关联或剪辑设置不在已核对范围；不改变作者选项')
+    return rest+([dict(ai_highlight=False)] if ai else [])
 
 
 def unique_json(text):
