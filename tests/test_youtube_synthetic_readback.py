@@ -64,5 +64,22 @@ class SyntheticReadbackTest(unittest.TestCase):
         self.assertFalse(synthetic_readback_ok(False,None,False))
         self.assertFalse(synthetic_readback_ok(True,True,False))
         self.assertFalse(synthetic_readback_ok(None,None,True))
+        studio={'altered_content':'yes'}
+        self.assertTrue(synthetic_readback_ok(True,None,True,studio))
+        self.assertFalse(synthetic_readback_ok(True,None,False,studio))
+        self.assertFalse(synthetic_readback_ok(True,False,True,studio))
+        self.assertFalse(synthetic_readback_ok(True,None,True,{'altered_content':'no'}))
+
+    def test_studio_observation_file_binding(self):
+        import tempfile,json as _j
+        from youtube_adapter import studio_synthetic, studio_synthetic_path, PublishError
+        d=tempfile.mkdtemp();rp=d+'/k.json'
+        self.assertIsNone(studio_synthetic(rp,'VID'))
+        ok=dict(source='youtube_studio',video_id='VID',altered_content='yes',radio='VIDEO_HAS_ALTERED_CONTENT_YES',observed_at='2026-11-05T21:20:00+08:00')
+        studio_synthetic_path(rp).write_text(_j.dumps(ok))
+        self.assertEqual(studio_synthetic(rp,'VID')['altered_content'],'yes')
+        with self.assertRaises(PublishError):studio_synthetic(rp,'OTHER')
+        studio_synthetic_path(rp).write_text(_j.dumps(dict(ok,radio='VIDEO_HAS_ALTERED_CONTENT_NO')))
+        with self.assertRaises(PublishError):studio_synthetic(rp,'VID')
 
 if __name__=='__main__': unittest.main()

@@ -207,3 +207,8 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 
 现象：发布前核对报「微博视频分类、关联或剪辑设置不在已核对范围」，表单已填未发送。原因是微博新增第 4 个开关「开启AI高光片段（预估流量+35%）」，默认关闭。
 处理：`default_options` 只在该开关能唯一识别（向上找到含该文字、且只含一个开关的容器）且保持关闭时接受，不替作者打开；其余三项仍按原形态核对。开关被打开、出现两个或其他开关形态变化仍停止。已有表单未发送的任务按原流程 `resume` 只读核对后再 `run`。
+
+## YouTube 合成内容声明「是」接口读回为 null（2026-11-05）
+
+现象：上传请求 `containsSyntheticMedia=true`，`videos.list` 仍返回 null（`videos.update` 写入 200 后也一样），verify 报「合成媒体声明未读回」，任务停在 pending。
+处理：观察者在作者专用 Chrome 已登录的 YouTube Studio 打开该视频「详细信息 → 显示更多 → AI 使用情况」，只读确认单选 `VIDEO_HAS_ALTERED_CONTENT_YES` 已选中（未选中则只改这一项并保存，刷新再读），在请求目录写 `<key>.json.synthetic-studio.json`：`source=youtube_studio`、`video_id`、`altered_content=yes`、`radio`、`observed_at`（可附截图摘要）。之后只读 `resume`。文件须绑定同一视频 ID；声明「否」的路线不受影响，接口读回 true 仍直接通过。

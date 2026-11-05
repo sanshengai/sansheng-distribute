@@ -523,11 +523,28 @@ def dispatch_component(request_path, action, profile, client_factory=APIClient):
     return result
 
 
-def synthetic_readback_ok(expected, observed, request_sent):
+def studio_synthetic_path(request_path):
+    return Path(str(request_path)+'.synthetic-studio.json')
+
+
+def studio_synthetic(request_path, video_id):
+    """2026-11-05 SX01：Data API 对 containsSyntheticMedia=true 也读回 null。观察者在 YouTube Studio
+    读到「AI 使用情况」单选 VIDEO_HAS_ALTERED_CONTENT_YES 已选中时留下的证据；须绑定同一视频 ID。"""
+    path=studio_synthetic_path(request_path)
+    if not path.exists(): return None
+    value=read_json(path)
+    if (not isinstance(value,dict) or value.get('source')!='youtube_studio' or value.get('video_id')!=video_id
+            or value.get('altered_content')!='yes' or value.get('radio')!='VIDEO_HAS_ALTERED_CONTENT_YES'
+            or not value.get('observed_at')):
+        raise PublishError('YouTube Studio 合成内容观察文件不可信')
+    return value
+
+
+def synthetic_readback_ok(expected, observed, request_sent, studio=None):
     """平台对 containsSyntheticMedia=false 读回为 null/缺失；仅在会话请求已确实声明 false 时视为「否」。
     expected=True 仍须严格读回 True。request_sent 必须来自上传检查点绑定的同一请求体摘要。"""
     if type(expected) is not bool or request_sent is not True: return False
-    if expected: return observed is True
+    if expected: return observed is True or (observed is None and isinstance(studio,dict) and studio.get('altered_content')=='yes')
     return observed is False or observed is None
 
 
@@ -612,7 +629,8 @@ def dispatch(request_path, action, profile, client_factory=APIClient):
         sent_digest = cp.get('binding',{}).get('resource_digest') if isinstance(cp,dict) else None
         if not synthetic_readback_ok(resource['status']['containsSyntheticMedia'],
                                      st.get('containsSyntheticMedia', None) if 'containsSyntheticMedia' in st else None,
-                                     sent_digest == digest(resource)):
+                                     sent_digest == digest(resource),
+                                     studio_synthetic(request_path, video_id) if resource['status']['containsSyntheticMedia'] is True else None):
             raise PublishError('YouTube 合成媒体声明未读回')
     if ('categoryId' in resource['snippet'] and sn.get('categoryId') != resource['snippet']['categoryId']):
         raise PublishError('YouTube 分类未读回')
