@@ -194,3 +194,7 @@ S4E03 是播放器就绪等待超时，S4E08 是账号核对的临时首页标�
 现象：封面弹窗保存后，读回报「未改变或发生额外裁切」；事后同一窗口里竖封面已是 1078×1440（在容差内），未点发布。
 根因：保存后预览先显示过渡图，最终转码图稍后才替换；旧代码在预览 src 一变就只读一次。已修：读回在 `READBACK_SETTLE_SECONDS`（20s）内反复读取，直到最终图对象变化且尺寸在容差内；超时报错并带上读回尺寸。
 恢复同上一节：只读核对原窗口封面与作品列表（无该集）→ `confirm_unsubmitted.py`（不加 --release）→ `resume` → `run`（readback_only，不重传）。
+
+## YouTube 合集加入结果未知（2026-11-05）
+
+合集 POST 报错后组件记为 unknown 并占账号锁。`publish.py youtube-component-release <组件key>` 先只读核对；仅当读回证明视频不在该合集（absent）时记 not_submitted、回到 prepared、撤销组件授权并释放账号锁；已在合集则记 verified；无法证明则保持 unknown。释放后须重新 authorize 再 run。合集位置不得超过当前条目数（空列表先加第 0 位）。视频 ID 以 `-` 开头时命令行写 `--video-id=<ID>`。

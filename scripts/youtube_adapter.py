@@ -473,6 +473,7 @@ def dispatch_component(request_path, action, profile, client_factory=APIClient):
         matches=_playlist_matches(client,playlist,video_id,channel,position)
         if action=='verify_component':
             result['state']='verified' if len(matches)==1 else 'unknown'
+            if not matches: result['absent']=True  # read-only proof: video not anywhere in playlist
             return result
         if matches:
             result['state']='accepted'; return result

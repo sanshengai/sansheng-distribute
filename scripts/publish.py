@@ -34,6 +34,8 @@ def main():
     p.add_argument('key'); p.add_argument('--spec', required=True)
     p = sub.add_parser('youtube-component-authorize', help='记录已有用户对具体组件任务的授权')
     p.add_argument('key'); p.add_argument('--statement', required=True)
+    p = sub.add_parser('youtube-component-release', help='合集加入结果未知且只读核对视频不在合集时，记未提交并释放账号锁（需重新授权）')
+    p.add_argument('key')
     for name in ('youtube-component-status', 'youtube-component-revoke'):
         p = sub.add_parser(name); p.add_argument('key')
     for name in ('youtube-component-run', 'youtube-component-verify'):
@@ -141,6 +143,9 @@ def main():
                 result = store.youtube_component_status(args.key)
             elif args.action == 'youtube-component-revoke':
                 result = store.revoke_youtube_component(args.key)
+            elif args.action == 'youtube-component-release':
+                from publish_core import release_youtube_playlist
+                result = release_youtube_playlist(store, args.key, load_profile(args.profile))
             elif args.action in {'youtube-component-run', 'youtube-component-verify'}:
                 from publish_core import run_youtube_component
                 result = run_youtube_component(store, args.key, args.part, load_profile(args.profile),

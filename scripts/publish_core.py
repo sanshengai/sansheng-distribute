@@ -787,6 +787,26 @@ class Store:
                                 (parent['platform'], parent['account'], key))
         return self.youtube_component_status(key)
 
+    def release_youtube_playlist_unsubmitted(self, key, observation):
+        """Unknown playlist insert proven absent by read-only readback: back to prepared, grant revoked."""
+        with self.tx():
+            job = self.youtube_component_status(key)
+            parent = self.status(job['parent_key'])
+            if job['playlist_state'] != 'unknown' or not job['binding'].get('playlist_id'):
+                raise PublishError('只有结果未知的合集任务可释放')
+            expected = {'component_key': key, 'original_job_key': job['parent_key'],
+                        'video_id': job['binding']['video_id'], 'part': 'playlist', 'state': 'unknown', 'absent': True}
+            if any(observation.get(k) != v for k, v in expected.items()):
+                raise PublishError('只读核对未证明视频不在合集中；保持未知')
+            self.db.execute('UPDATE youtube_component_jobs SET playlist_state=?,updated_at=? WHERE key=?', ('prepared', now(), key))
+            self.db.execute('DELETE FROM youtube_component_grants WHERE key=?', (key,))
+            self.db.execute('INSERT INTO youtube_component_events(component_key,part,state,data,created_at) VALUES (?,?,?,?,?)',
+                            (key, 'playlist', 'not_submitted', canonical(observation), now()))
+            if job['cover_state'] not in {'unknown', 'accepted'}:
+                self.db.execute('DELETE FROM account_locks WHERE platform=? AND account=? AND job_key=?',
+                                (parent['platform'], parent['account'], key))
+        return self.youtube_component_status(key)
+
     def record_youtube_cover_review(self, parent_key, video_id, cover_sha256, thumbnail_url,
                                     thumbnail_path, reviewer, statement, reviewed_at, *, component_key=None):
         """Store an attributed visual review; this method never writes to YouTube."""
@@ -1267,6 +1287,18 @@ def run_youtube_component(store, key, part, profile, *, verify_only=False):
                     and observation.get('cover_sha256') == review['cover_sha256']):
                 observation = dict(observation, state='visually_reviewed')
         return store.observe_youtube_component(key, part, observation, verified=True)
+
+
+def release_youtube_playlist(store, key, profile):
+    """Read-only recheck; release an unknown playlist insert only when the video is absent from the playlist."""
+    if store.youtube_component_status(key)['playlist_state'] != 'unknown':
+        raise PublishError('只有结果未知的合集任务可释放')
+    current = run_youtube_component(store, key, 'playlist', profile, verify_only=True)
+    if current['playlist_state'] != 'unknown':
+        return current
+    row = store.db.execute('SELECT data FROM youtube_component_events WHERE component_key=? AND part=? ORDER BY id DESC LIMIT 1',
+                           (key, 'playlist')).fetchone()
+    return store.release_youtube_playlist_unsubmitted(key, json.loads(row['data']) if row else {})
 
 
 def run_youtube_bundle(store, key, profile, *, continue_upload=False):
